@@ -1,8 +1,8 @@
 #ifndef PICO_H
 #define PICO_H
 
-#include <string>
+#include "globals.h"
 
-void build_pico(std::string project_name, std::string board_name);
+void build_pico(std::string project_name, Board board);
 
 #endif // PICO_H

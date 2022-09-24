@@ -1,5 +1,4 @@
 #include "lineanalyser.h"
-#include <boost/algorithm/string/replace.hpp>
 #include <cassert>
 
 using namespace std::string_literals;
@@ -35,16 +34,16 @@ std::string getType(int type)
     assert(false);
 }
 
-#define UNDEFINED_POSITION 9999999
-
 std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position);
 
 std::vector<std::unordered_map<u4, u4>> localsTypes;
 std::vector<Instruction> insts;
+std::unordered_map<u4, u4> closingBraces;
 std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<u2> lineNumbers)
 {
     insts.clear();
     localsTypes.push_back({});
+    closingBraces.clear();
 
     for (size_t i = 0; i < lineNumbers.size(); ++i)
     {
@@ -62,8 +61,6 @@ std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name,
 
     return insts;
 }
-
-std::unordered_map<u4, u4> closingBraces;
 
 int findLocal(int index)
 {
@@ -171,6 +168,11 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             boost::replace_all(fullName, "/"s, "::"s);
 
             std::string argsString;
+
+            if (methodName == "set_irq_enabled_with_callback")
+            {
+                std::string ss;
+            }
 
             auto argsCount = countArgs(descriptor);
             if (argsCount && argsCount <= stack.size())
@@ -416,7 +418,11 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             localsTypes.push_back({});
             break;
         }
+        case if_icmpeq:
         case if_icmpne:
+        case if_icmplt:
+        case if_icmpge:
+        case if_icmpgt:
         case if_icmple:
         {
             previousWasElse = false;
@@ -433,8 +439,12 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             std::string op;
             switch (opcode)
             {
+            case if_icmpeq: op = "!="; break;
             case if_icmpne: op = "=="; break;
-            case if_icmple: op = ">";  break;
+            case if_icmplt: op = ">="; break;
+            case if_icmpge: op =  "<"; break;
+            case if_icmpgt: op = "<="; break;
+            case if_icmple: op =  ">"; break;
             default: assert(false);
             }
 
@@ -543,20 +553,24 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         }
         case return_:
         {
-            assert (stack.size() <= 1);
-
-            if (stack.size() == 1)
-            {
-                // MOV
-                assert(false);
-                stack.pop_back();
-            }
+            assert (stack.size() == 0);
 
             lines.push_back(Instruction {
                                 position,
                                 "return;",
                                 {}
                             });
+            break;
+        }
+        case invokedynamic:
+        {
+            auto id = r16();
+            auto zero = r16();
+            assert(zero == 0);
+
+            auto invokeDyn = std::get<InvokeDynamic>(constantPool[id]);
+
+            stack.push_back(callbacksMethods[invokeDyn.bootstrap_method_attr_index]);
             break;
         }
         case newarray:

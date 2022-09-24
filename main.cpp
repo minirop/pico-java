@@ -1,13 +1,34 @@
 #include "globals.h"
 #include "lineanalyser.h"
+#include "boards/pico.h"
+
+using namespace std::string_literals;
 
 u4 countArgs(std::string str)
 {
-    auto start = str.find('(');
-    auto end = str.find(')');
-    auto d = end - start - 1;
+    int count = 0;
+    assert(str[0] == '(');
+    for (size_t index = 1; index < str.size(); ++index)
+    {
+        switch (str[index])
+        {
+        case ')':
+            index = str.size();
+            break;
+        case 'L':
+            ++count;
+            while (str[index] != ';') ++index;
+            break;
+        case 'I':
+        case 'Z':
+            ++count;
+            break;
+        default:
+            assert(false);
+        }
+    }
 
-    return d;
+    return count;
 }
 
 attribute_info readAttribute(Buffer & buffer);
@@ -15,10 +36,12 @@ attribute_info readAttribute(Buffer & buffer);
 std::vector<Instruction> convertBytecode(Buffer & buffer, std::string function, u2 depth);
 void initializeFields(Buffer & buffer);
 std::string getTypeFromDescriptor(std::string descriptor);
+Board getBoardTypeFromString(std::string board_name);
 
 ConstantPool constantPool;
 std::vector<FieldData> fields;
 std::vector<FunctionData> functions;
+std::vector<std::string> callbacksMethods;
 
 std::string getStringFromUtf8(int index)
 {
@@ -119,14 +142,23 @@ int main(int argc, char** argv)
             break;
         }
         case CONSTANT_MethodHandle:
-            assert(false);
+        {
+            MethodHandle info { r8(), r16() };
+            constantPool.push_back(info);
             break;
+        }
         case CONSTANT_MethodType:
-            assert(false);
+        {
+            r16();
+            constantPool.push_back({});
             break;
+        }
         case CONSTANT_InvokeDynamic:
-            assert(false);
+        {
+            InvokeDynamic info { r16(), r16() };
+            constantPool.push_back(info);
             break;
+        }
         default:
             assert(false);
         }
@@ -156,6 +188,15 @@ int main(int argc, char** argv)
         }
     }
 
+    struct MethData
+    {
+        std::string name;
+        std::string descriptor;
+        Buffer buffer;
+    };
+
+    std::vector<MethData> methodsToDecompile;
+
     auto methods_count = r16();
     for (int i = 0; i < methods_count; ++i)
     {
@@ -181,77 +222,10 @@ int main(int argc, char** argv)
 
                 if (attribute_name == "Code")
                 {
-                    auto buffer = attr.info;
-                    [[maybe_unused]] u2 max_stack = r16();
-                    u2 max_locals = r16();
-                    u4 code_length = r32();
-
-                    Buffer code;
-                    for (u4 i = 0; i < code_length; ++i)
-                    {
-                        code.push_back(r8());
-                    }
-
-                    u2 exception_table_length = r16();
-                    for (u4 i = 0; i < exception_table_length; ++i)
-                    {
-                        [[maybe_unused]] u2 start_pc = r16();
-                        [[maybe_unused]] u2 end_pc = r16();
-                        [[maybe_unused]] u2 handler_pc = r16();
-                        [[maybe_unused]] u2 catch_type = r16();
-                    };
-
-                    std::vector<u2> lineNumbers;
-
-                    u2 attributes_count = r16();
-                    for (u2 i = 0; i < attributes_count; ++i)
-                    {
-                        attributes.push_back(readAttribute(buffer));
-                        auto attribute_name = getStringFromUtf8(attributes.back().attribute_name_index);
-                        if (attribute_name == "LineNumberTable")
-                        {
-                            auto buffer = attributes.back().info;
-                            u2 line_number_table_length = r16();
-                            for (u2 a = 0; a < line_number_table_length; ++a)
-                            {
-                                u2 start_pc = r16();
-                                [[maybe_unused]] u2 line_number = r16();
-
-                                lineNumbers.push_back(start_pc);
-                            }
-                        }
-                    }
-
-                    if (name == "<clinit>")
-                    {
-                        //initializeFields(code);
-                        name = "static_init";
-                    }
-                    //else
-                    {
-                        FunctionData funData;
-                        funData.name = name;
-                        funData.descriptor = descriptor;
-                        funData.instructions = lineAnalyser(code, name, lineNumbers);
-
-                        if (name == "main")
-                        {
-                            Instruction inst;
-                            inst.position = 999999;
-                            inst.opcode = fmt::format("static_init();");
-                            funData.instructions.insert(funData.instructions.begin(), inst);
-                        }
-
-                        if (false && max_locals)
-                        {
-                            Instruction inst;
-                            inst.position = 999999;
-                            inst.opcode = fmt::format("int locals[{}];", max_locals);
-                            funData.instructions.insert(funData.instructions.begin(), inst);
-                        }
-
-                        functions.push_back(funData);
-                    }
+                    methodsToDecompile.push_back({ name, descriptor, attr.info });
+                }
+                else if (attribute_name == "LineNumberTable")
+                {
                 }
                 else
                 {
@@ -307,14 +281,126 @@ int main(int argc, char** argv)
 
                         iii = num_element_value_pairs;
                         ii = num_annotations;
-                        i = attributes_count;
                     }
                 }
             }
         }
+        else if (attribute_name == "SourceFile")
+        {
+        }
+        else if (attribute_name == "BootstrapMethods")
+        {
+            auto buffer = attributes.back().info;
+
+            u2 num_bootstrap_methods = r16();
+
+            for (u2 ii = 0; ii < num_bootstrap_methods; ++ii)
+            {
+                [[maybe_unused]] u2 bootstrap_method_ref = r16();
+                u2 num_bootstrap_arguments = r16();
+                for (u2 arg = 0; arg < num_bootstrap_arguments; ++arg)
+                {
+                    u2 bootstrap_argument = r16();
+                    if (std::holds_alternative<MethodHandle>(constantPool[bootstrap_argument]))
+                    {
+                        auto handle = std::get<MethodHandle>(constantPool[bootstrap_argument]);
+                        assert(handle.reference_kind == REF_invokeStatic);
+
+                        auto method = std::get<Methodref>(constantPool[handle.reference_index]);
+                        auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
+                        auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
+                        auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+
+                        std::string caster;
+                        if (descriptor == "(II)V")
+                        {
+                            caster = "(gpio_irq_callback_t)";
+                        }
+
+                        auto fullName = fmt::format("{}{}::{}", caster, className, methodName);
+                        boost::replace_all(fullName, "/"s, "::"s);
+
+                        callbacksMethods.push_back(fullName);
+                    }
+                }
+            }
+        }
+        else if (attribute_name == "InnerClasses")
+        {
+        }
+        else
+        {
+            assert(false);
+        }
     }
 
-    build_pico(project_name, board_name);
+    for (auto & meth : methodsToDecompile)
+    {
+        auto name = meth.name;
+        auto descriptor = meth.descriptor;
+        auto buffer = meth.buffer;
+
+        [[maybe_unused]] u2 max_stack = r16();
+        [[maybe_unused]] u2 max_locals = r16();
+        u4 code_length = r32();
+
+        Buffer code;
+        for (u4 i = 0; i < code_length; ++i)
+        {
+            code.push_back(r8());
+        }
+
+        u2 exception_table_length = r16();
+        for (u4 i = 0; i < exception_table_length; ++i)
+        {
+            [[maybe_unused]] u2 start_pc = r16();
+            [[maybe_unused]] u2 end_pc = r16();
+            [[maybe_unused]] u2 handler_pc = r16();
+            [[maybe_unused]] u2 catch_type = r16();
+        };
+
+        std::vector<u2> lineNumbers;
+
+        u2 attributes_count = r16();
+        for (u2 i = 0; i < attributes_count; ++i)
+        {
+            attributes.push_back(readAttribute(buffer));
+            auto attribute_name = getStringFromUtf8(attributes.back().attribute_name_index);
+            if (attribute_name == "LineNumberTable")
+            {
+                auto buffer = attributes.back().info;
+                u2 line_number_table_length = r16();
+                for (u2 a = 0; a < line_number_table_length; ++a)
+                {
+                    u2 start_pc = r16();
+                    [[maybe_unused]] u2 line_number = r16();
+
+                    lineNumbers.push_back(start_pc);
+                }
+            }
+            else if (attribute_name == "StackMapTable")
+            {
+            }
+            else
+            {
+                assert(false);
+            }
+        }
+
+        if (name == "<clinit>")
+        {
+            name = "static_init";
+        }
+
+        FunctionData funData;
+        funData.name = name;
+        funData.descriptor = descriptor;
+        funData.instructions = lineAnalyser(code, name, lineNumbers);
+
+        functions.push_back(funData);
+    }
+
+    build_pico(project_name, getBoardTypeFromString(board_name));
 
     return 0;
 }
@@ -403,6 +489,18 @@ std::string getReturnType(std::string descriptor)
     {
         return "int";
     }
+
+    assert(false);
+}
+
+Board getBoardTypeFromString(std::string board_name)
+{
+    std::transform(begin(board_name), end(board_name), begin(board_name), [](auto c) { return std::tolower(c); });
+
+    if (board_name == "pico")         return Board::Pico;
+    if (board_name == "picow")        return Board::PicoW;
+    if (board_name == "tiny2040")     return Board::Tiny2040;
+    if (board_name == "tiny2040_2mb") return Board::Tiny2040_2mb;
 
     assert(false);
 }

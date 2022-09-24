@@ -8,17 +8,16 @@ namespace fs = std::filesystem;
 
 std::set<std::string> usedFieldNames;
 
-std::string get_cmake_board_name(std::string board_name);
+std::string get_cmake_board_name(Board board);
+std::string generateParameters(std::string descriptor);
 
-void build_pico(std::string project_name, std::string board_name)
+void build_pico(std::string project_name, Board board)
 {
     if (!getenv("PICO_SDK_PATH"))
     {
         fmt::print("$PICO_SDK_PATH is not set nor accessible. Aborting.\n");
-        //return;
+        return;
     }
-
-    bool isPicoW = board_name == "PicoW";
 
     auto currentPath = fs::current_path();
     auto tempPath = fs::temp_directory_path();
@@ -32,14 +31,19 @@ void build_pico(std::string project_name, std::string board_name)
     std::ofstream output_c("main.cpp");
 
     output_c << "#include \"pico-java.h\"\n"
-                  "\n"
-                  "void static_init();\n"
                   "\n";
 
     output_c << "namespace " << project_name << "\n{\n";
     for (auto & field : fields)
     {
         output_c << '\t' << field.type << " " << field.name << ";\n";
+    }
+    for (auto & func : functions)
+    {
+        if (func.name != "main")
+        {
+            output_c << '\t' << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
+        }
     }
     output_c << "}\n\n";
 
@@ -50,10 +54,22 @@ void build_pico(std::string project_name, std::string board_name)
         {
             has_static_init = true;
         }
+    }
 
+    for (auto & func : functions)
+    {
         bool isMain = func.name == "main";
 
-        output_c << (isMain ? "int" : getReturnType(func.descriptor)) << " " << func.name << "()\n{\n";
+        if (!isMain)
+        {
+            output_c << "namespace " << project_name << " {\n";
+        }
+
+        output_c << (isMain ? "int" : getReturnType(func.descriptor)) << " " << func.name << "(" << (isMain ? "" : generateParameters(func.descriptor)) << ")\n{\n";
+        if (isMain && has_static_init)
+        {
+            output_c << "\t" << project_name << "::static_init();\n";
+        }
         for (auto & inst : func.instructions)
         {
             if (inst.label.has_value())
@@ -63,15 +79,17 @@ void build_pico(std::string project_name, std::string board_name)
 
             output_c << '\t' << inst.opcode << '\n';
         }
-        output_c << "}\n\n";
+        output_c << "}\n";
+
+        if (!isMain)
+        {
+            output_c << "}\n";
+        }
+
+        output_c << '\n';
     }
 
-    if (!has_static_init)
-    {
-        output_c << "void static_init() {}\n\n";
-    }
-
-    if (isPicoW)
+    if (board == Board::PicoW)
     {
         libs = "pico_cyw43_arch_none";
     }
@@ -99,7 +117,7 @@ pico_add_extra_outputs({0})
 
 target_link_libraries({0} pico_stdlib {1})
 
-)___", project_name, libs, get_cmake_board_name(board_name));
+)___", project_name, libs, get_cmake_board_name(board));
 
     output_cmake.close();
 
@@ -122,6 +140,8 @@ namespace pico
     {
         static inline int INPUT = GPIO_IN;
         static inline int OUTPUT = GPIO_OUT;
+        static inline int IRQ_EDGE_RISE = GPIO_IRQ_EDGE_RISE;
+        static inline int IRQ_EDGE_FALL = GPIO_IRQ_EDGE_FALL;
 
         inline void init(int pin)
         {
@@ -148,6 +168,21 @@ namespace pico
             gpio_pull_up(pin);
         }
 
+        inline void pull_down(int pin)
+        {
+            gpio_pull_down(pin);
+        }
+
+        inline void set_input_enabled(int pin, bool enabled)
+        {
+            gpio_set_input_enabled(pin, enabled);
+        }
+
+        inline void set_irq_enabled_with_callback(int pin, int events, bool enabled, gpio_irq_callback_t callback)
+        {
+            gpio_set_irq_enabled_with_callback(pin, events, enabled, callback);
+        }
+
         inline void set_mask(int pin)
         {
             gpio_set_mask(pin);
@@ -169,7 +204,7 @@ namespace pico
 }
 )___";
 
-    if (isPicoW)
+    if (board == Board::PicoW)
     {
         output_header << R"___(
 #include "pico/cyw43_arch.h"
@@ -202,12 +237,49 @@ namespace pico
     system(fmt::format("cp {}.uf2 {}", project_name, currentPath.string()).data());
 }
 
-std::string get_cmake_board_name(std::string board_name)
+std::string get_cmake_board_name(Board board)
 {
-    if (board_name == "Pico")         return "pico";
-    if (board_name == "PicoW")        return "pico_w";
-    if (board_name == "Tiny2040")     return "pimoroni_tiny2040";
-    if (board_name == "Tiny2040_2mb") return "pimoroni_tiny2040_2mb";
+    if (board == Board::Pico)         return "pico";
+    if (board == Board::PicoW)        return "pico_w";
+    if (board == Board::Tiny2040)     return "pimoroni_tiny2040";
+    if (board == Board::Tiny2040_2mb) return "pimoroni_tiny2040_2mb";
 
     assert(false);
+}
+
+std::string generateParameters(std::string descriptor)
+{
+    std::string ret;
+
+    int count = 0;
+    assert(descriptor[0] == '(');
+    for (size_t index = 1; index < descriptor.size(); ++index)
+    {
+        switch (descriptor[index])
+        {
+        case ')':
+            index = descriptor.size();
+            break;
+        case 'L':
+            while (descriptor[index] != ';') ++index;
+            assert(false);
+            break;
+        case 'I':
+            ret += fmt::format(", int ilocal_{}", count);
+            ++count;
+            break;
+        case 'Z':
+            ret += fmt::format(", int ilocal_{}", count);
+            ++count;
+            break;
+        default:
+            assert(false);
+        }
+    }
+
+    if (ret.size() > 0)
+    {
+        ret = ret.substr(2);
+    }
+    return ret;
 }

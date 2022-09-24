@@ -16,7 +16,7 @@
 #include <set>
 #include <utility>
 #include <cassert>
-#include "boards/pico.h"
+#include <boost/algorithm/string/replace.hpp>
 
 using u1 = uint8_t;
 using u2 = uint16_t;
@@ -85,7 +85,11 @@ enum
     ishl = 0x78,
     iinc = 0x84,
     ifne = 0x9a,
+    if_icmpeq = 0x9f,
     if_icmpne = 0xa0,
+    if_icmplt = 0xa1,
+    if_icmpge = 0xa2,
+    if_icmpgt = 0xa3,
     if_icmple = 0xa4,
     goto_ = 0xa7,
     iand = 0x7e,
@@ -93,6 +97,7 @@ enum
     getstatic = 0xb2,
     putstatic = 0xb3,
     invokestatic = 0xb8,
+    invokedynamic = 0xba,
     newarray = 0xbc,
     arraylength = 0xbe,
 };
@@ -130,6 +135,26 @@ enum {
     CONSTANT_InvokeDynamic      = 18,
 };
 
+enum {
+    REF_getField         = 1,
+    REF_getStatic        = 2,
+    REF_putField         = 3,
+    REF_putStatic        = 4,
+    REF_invokeVirtual    = 5,
+    REF_invokeStatic     = 6,
+    REF_invokeSpecial    = 7,
+    REF_newInvokeSpecial = 8,
+    REF_invokeInterface  = 9,
+};
+
+enum class Board
+{
+    Pico,
+    PicoW,
+    Tiny2040,
+    Tiny2040_2mb,
+};
+
 struct Fieldref
 {
     u2 class_index;
@@ -146,6 +171,18 @@ struct InterfaceMethodref
 {
     u2 class_index;
     u2 name_and_type_index;
+};
+
+struct InvokeDynamic
+{
+    u2 bootstrap_method_attr_index;
+    u2 name_and_type_index;
+};
+
+struct MethodHandle
+{
+    u1 reference_kind;
+    u2 reference_index;
 };
 
 struct Class
@@ -181,13 +218,15 @@ struct method_info
     std::vector<attribute_info> attributes;
 };
 
-using Constant = std::variant<Fieldref, Methodref, InterfaceMethodref, Class, NameAndType, Utf8>;
+using Constant = std::variant<Fieldref, Methodref, InterfaceMethodref, Class, NameAndType, Utf8, InvokeDynamic, MethodHandle>;
 using ConstantPool = std::vector<Constant>;
 extern ConstantPool constantPool;
+extern std::vector<std::string> callbacksMethods;
 
 std::string getStringFromUtf8(int index);
 u4 countArgs(std::string str);
-std::string getTypeFromDescriptor(std::string descriptor);
 std::string getReturnType(std::string descriptor);
+
+#define UNDEFINED_POSITION 999999
 
 #endif // GLOBALS_H
