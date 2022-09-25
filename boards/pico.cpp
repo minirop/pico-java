@@ -16,7 +16,16 @@ void build_pico(std::string project_name, Board board)
     if (!getenv("PICO_SDK_PATH"))
     {
         fmt::print("$PICO_SDK_PATH is not set nor accessible. Aborting.\n");
-        return;
+        //return;
+    }
+
+    if (board == Board::Badger2040)
+    {
+        if (!getenv("PIMORONI_PICO_PATH"))
+        {
+            fmt::print("$PIMORONI_PICO_PATH is not set nor accessible. Aborting.\n");
+            //return;
+        }
     }
 
     auto currentPath = fs::current_path();
@@ -33,19 +42,22 @@ void build_pico(std::string project_name, Board board)
     output_c << "#include \"pico-java.h\"\n"
                   "\n";
 
-    output_c << "namespace " << project_name << "\n{\n";
-    for (auto & field : fields)
+    if (fields.size() || functions.size() > 1)
     {
-        output_c << '\t' << field.type << " " << field.name << ";\n";
-    }
-    for (auto & func : functions)
-    {
-        if (func.name != "main")
+        output_c << "namespace " << project_name << "\n{\n";
+        for (auto & field : fields)
         {
-            output_c << '\t' << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
+            output_c << '\t' << field.type << " " << field.name << ";\n";
         }
+        for (auto & func : functions)
+        {
+            if (func.name != "main")
+            {
+                output_c << '\t' << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
+            }
+        }
+        output_c << "}\n\n";
     }
-    output_c << "}\n\n";
 
     bool has_static_init = false;
     for (auto & func : functions)
@@ -89,36 +101,36 @@ void build_pico(std::string project_name, Board board)
         output_c << '\n';
     }
 
+    output_c.close();
+
+    std::ofstream output_cmake("CMakeLists.txt");
+
     if (board == Board::PicoW)
     {
         libs = "pico_cyw43_arch_none";
     }
 
-    output_c.close();
-
-    std::ofstream output_cmake("CMakeLists.txt");
-
-    output_cmake << fmt::format(R"___(
-cmake_minimum_required(VERSION 3.12)
-
-set(PICO_BOARD "{2}")
-
-include($ENV{{PICO_SDK_PATH}}/external/pico_sdk_import.cmake)
-
-project({0})
-
-pico_sdk_init()
-
-add_executable({0}
-    main.cpp
-)
-
-pico_add_extra_outputs({0})
-
-target_link_libraries({0} pico_stdlib {1})
-
-)___", project_name, libs, get_cmake_board_name(board));
-
+    output_cmake << "cmake_minimum_required(VERSION 3.12)\n"
+                 << fmt::format("set(PICO_BOARD \"{}\")\n", get_cmake_board_name(board))
+                 << "include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)\n";
+    if (board == Board::Badger2040)
+    {
+        output_cmake << "include($ENV{PIMORONI_PICO_PATH}/pimoroni_pico_import.cmake)\n"
+                     << "include($ENV{PIMORONI_PICO_PATH}/libraries/bitmap_fonts/bitmap_fonts.cmake)\n"
+                     << "include($ENV{PIMORONI_PICO_PATH}/libraries/hershey_fonts/hershey_fonts.cmake)\n"
+                     << "include($ENV{PIMORONI_PICO_PATH}/drivers/uc8151_legacy/uc8151_legacy.cmake)\n"
+                     << "include($ENV{PIMORONI_PICO_PATH}/libraries/badger2040/badger2040.cmake)\n";
+    }
+    output_cmake << fmt::format("project({})\n", project_name)
+                 << "pico_sdk_init()\n"
+                 << fmt::format("add_executable({} main.cpp)\n", project_name)
+                 << fmt::format("pico_add_extra_outputs({})\n", project_name);
+    if (board == Board::Badger2040)
+    {
+        output_cmake << fmt::format("target_include_directories({} PRIVATE $ENV{{PIMORONI_PICO_PATH}} $ENV{{PIMORONI_PICO_PATH}}/libraries/badger2040)\n", project_name);
+        libs = "badger2040 hardware_spi";
+    }
+    output_cmake << fmt::format("target_link_libraries({} pico_stdlib {})\n", project_name, libs);
     output_cmake.close();
 
     std::ofstream output_header("pico-java.h");
@@ -228,9 +240,79 @@ namespace pico
 }
 )___";
     }
+    else if (board == Board::Badger2040)
+    {
+        output_header << R"___(
+#include "badger2040.hpp"
+
+namespace pimoroni
+{
+    static inline Badger2040 badger2040;
+
+    namespace badger
+    {
+        inline void init()
+        {
+            badger2040.init();
+        }
+
+        inline void halt()
+        {
+            badger2040.halt();
+        }
+
+        inline void update()
+        {
+            badger2040.update();
+        }
+
+        inline void clear()
+        {
+            badger2040.clear();
+        }
+
+        inline void wait_for_press()
+        {
+            badger2040.wait_for_press();
+        }
+
+        inline void led(int brightness)
+        {
+            badger2040.led(brightness);
+        }
+
+        inline void thickness(int size)
+        {
+            badger2040.thickness(size);
+        }
+
+        inline void pen(int colour)
+        {
+            badger2040.pen(colour);
+        }
+
+        inline bool pressed_to_wake(int pin)
+        {
+            return badger2040.pressed_to_wake(pin);
+        }
+
+        inline bool is_busy()
+        {
+            return badger2040.is_busy();
+        }
+
+        inline void text(std::string string, int x, int y, float s)
+        {
+            badger2040.text(string, x, y, s);
+        }
+    }
+}
+)___";
+    }
 
     output_header.close();
 
+    return;
     fs::current_path(tempPath / tempDir / "build");
     system("cmake ..");
     system("make");
@@ -243,6 +325,7 @@ std::string get_cmake_board_name(Board board)
     if (board == Board::PicoW)        return "pico_w";
     if (board == Board::Tiny2040)     return "pimoroni_tiny2040";
     if (board == Board::Tiny2040_2mb) return "pimoroni_tiny2040_2mb";
+    if (board == Board::Badger2040)   return "pimoroni_badger2040";
 
     assert(false);
 }
@@ -265,9 +348,6 @@ std::string generateParameters(std::string descriptor)
             assert(false);
             break;
         case 'I':
-            ret += fmt::format(", int ilocal_{}", count);
-            ++count;
-            break;
         case 'Z':
             ret += fmt::format(", int ilocal_{}", count);
             ++count;

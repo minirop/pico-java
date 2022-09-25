@@ -1,4 +1,6 @@
 #include "lineanalyser.h"
+#include <bit>
+#include <endian.h>
 #include <cassert>
 
 using namespace std::string_literals;
@@ -6,6 +8,7 @@ using namespace std::string_literals;
 enum
 {
     T_NONE    = 0,
+    T_STRING  = 1,
     T_ARRAY   = 3,
     T_BOOLEAN = 4,
     T_CHAR    = 5,
@@ -39,11 +42,15 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
 std::vector<std::unordered_map<u4, u4>> localsTypes;
 std::vector<Instruction> insts;
 std::unordered_map<u4, u4> closingBraces;
+std::set<u4> skippedGotos;
+Buffer * fullBuffer = nullptr;
 std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<u2> lineNumbers)
 {
     insts.clear();
     localsTypes.push_back({});
     closingBraces.clear();
+
+    fullBuffer = &buffer;
 
     for (size_t i = 0; i < lineNumbers.size(); ++i)
     {
@@ -116,6 +123,13 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             stack.push_back(fmt::format("{}", opcode - iconst_0));
             break;
         }
+        case fconst_0:
+        case fconst_1:
+        case fconst_2:
+        {
+            stack.push_back(fmt::format("{}f", opcode - fconst_0));
+            break;
+        }
         case getstatic:
         {
             auto id = r16();
@@ -168,12 +182,6 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             boost::replace_all(fullName, "/"s, "::"s);
 
             std::string argsString;
-
-            if (methodName == "set_irq_enabled_with_callback")
-            {
-                std::string ss;
-            }
-
             auto argsCount = countArgs(descriptor);
             if (argsCount && argsCount <= stack.size())
             {
@@ -193,20 +201,20 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 }
             }
 
-            auto callString = fmt::format("{}({});", fullName, argsString);
+            auto callString = fmt::format("{}({})", fullName, argsString);
             auto retType = getReturnType(descriptor);
             if (retType.size() && retType != "void")
             {
-                auto varName = fmt::format("var_0x{:x}", position);
-                callString = fmt::format("auto {} = {}", varName, callString);
-                stack.push_back(varName);
+                stack.push_back(callString);
             }
-
-            lines.push_back(Instruction {
-                                position,
-                                callString,
-                                {}
-                            });
+            else
+            {
+                lines.push_back(Instruction {
+                                    position,
+                                    callString + ";",
+                                    {}
+                                });
+            }
             break;
         }
         case bipush:
@@ -219,6 +227,29 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         {
             auto value = r16();
             stack.push_back(fmt::format("{}", value));
+            break;
+        }
+        case ldc:
+        {
+            auto index = r8();
+            auto constant = constantPool[index];
+
+            if (std::holds_alternative<String>(constant))
+            {
+                auto data = std::get<String>(constant);
+                auto str = getStringFromUtf8(data.string_index);
+                stack.push_back(fmt::format("\"{}\"", str));
+            }
+            else if (std::holds_alternative<Float>(constant))
+            {
+                auto data = std::get<Float>(constant);
+                float f = std::bit_cast<float>(data.bytes);
+                stack.push_back(fmt::format("{}f", f));
+            }
+            else
+            {
+                assert(false);
+            }
             break;
         }
         case iload:
@@ -312,18 +343,34 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             stack.pop_back();
             auto & locals = localsTypes.back();
             auto localType = findLocal(index);
-            if (localType != T_ARRAY)
+
+            std::string output;
+            if (v.starts_with("array_"))
             {
-                lines.push_back(Instruction {
-                                    UNDEFINED_POSITION,
-                                    fmt::format("auto alocal_{} = {};", index, v),
-                                    {}
-                                });
-                locals[index] = T_ARRAY;
+                if (localType != T_ARRAY)
+                {
+                    output = "auto";
+                    locals[index] = T_ARRAY;
+                }
             }
+            else
+            {
+                if (localType != T_STRING)
+                {
+                    output = "std::string";
+                    locals[index] = T_STRING;
+                }
+            }
+
+            lines.push_back(Instruction {
+                                UNDEFINED_POSITION,
+                                fmt::format("{} alocal_{} = {};", output, index, v),
+                                {}
+                            });
             break;
         }
         case iastore:
+        case aastore:
         {
             auto value = stack.back();
             stack.pop_back();
@@ -392,7 +439,12 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                             });
             break;
         }
+        case ifeq:
         case ifne:
+        case iflt:
+        case ifge:
+        case ifgt:
+        case ifle:
         {
             previousWasElse = false;
 
@@ -403,9 +455,28 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto value = stack.back();
             stack.pop_back();
 
+            std::string op;
+            switch (opcode)
+            {
+            case ifeq: op = "!="; break;
+            case ifne: op = "=="; break;
+            case iflt: op = ">="; break;
+            case ifge: op =  "<"; break;
+            case ifgt: op = "<="; break;
+            case ifle: op =  ">"; break;
+            default: assert(false);
+            }
+
+            std::string keyword = "if";
+            if ((*fullBuffer)[absolute - 3] == goto_)
+            {
+                keyword = "while";
+                skippedGotos.insert(absolute - 3);
+            }
+
             lines.push_back(Instruction {
                                 position,
-                                fmt::format("if ({} == 0) {{", value, name, absolute),
+                                fmt::format("{} ({} {} 0) {{", keyword, value, op),
                                 {}
                             });
 
@@ -424,6 +495,8 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         case if_icmpge:
         case if_icmpgt:
         case if_icmple:
+        case if_acmpeq:
+        case if_acmpne:
         {
             previousWasElse = false;
 
@@ -445,12 +518,21 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             case if_icmpge: op =  "<"; break;
             case if_icmpgt: op = "<="; break;
             case if_icmple: op =  ">"; break;
+            case if_acmpeq: op = "!="; break;
+            case if_acmpne: op = "=="; break;
             default: assert(false);
+            }
+
+            std::string keyword = "if";
+            if ((*fullBuffer)[absolute - 3] == goto_)
+            {
+                keyword = "while";
+                skippedGotos.insert(absolute - 3);
             }
 
             lines.push_back(Instruction {
                                 position,
-                                fmt::format("if ({} {} {}) {{", left, op, right, name, absolute),
+                                fmt::format("{} ({} {} {}) {{", keyword, left, op, right),
                                 {}
                             });
 
@@ -468,6 +550,12 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto correction = buffer_size - buffer.size() - 1;
             auto offset = s16();
             auto absolute = position + correction + offset;
+
+            if (skippedGotos.contains(position + correction))
+            {
+                break;
+            }
+
             if (offset < 0)
             {
                 bool found = false;
@@ -476,7 +564,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                     if (insts[iii].position == absolute)
                     {
                         insts.insert(insts.begin() + iii, Instruction {
-                                         position,
+                                         UNDEFINED_POSITION,
                                          "while (true) {",
                                          {}
                                      });
@@ -491,7 +579,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                         if (lines[iii].position == absolute)
                         {
                             lines.insert(lines.begin() + iii, Instruction {
-                                             position,
+                                             UNDEFINED_POSITION,
                                              "while (true) {",
                                              {}
                                          });
@@ -499,19 +587,21 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                         }
                     }
                 }
-                assert(found);
-                lines.push_back(Instruction {
-                                    position,
-                                    "}",
-                                    {}
-                                });
+                if (found)
+                {
+                    lines.push_back(Instruction {
+                                        UNDEFINED_POSITION,
+                                        "}",
+                                        {}
+                                    });
+                }
             }
             else
             {
                 if (previousWasElse)
                 {
                     lines.push_back(Instruction {
-                                        position,
+                                        UNDEFINED_POSITION,
                                         "}",
                                         {}
                                     });
@@ -519,7 +609,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                     localsTypes.pop_back();
                 }
                 lines.push_back(Instruction {
-                                    position,
+                                    UNDEFINED_POSITION,
                                     fmt::format("}} else {{"),
                                     {}
                                 });
@@ -555,9 +645,14 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         {
             assert (stack.size() == 0);
 
+            std::string ret = "return;";
+            if (name == "main")
+            {
+                ret = "return 0;";
+            }
             lines.push_back(Instruction {
                                 position,
-                                "return;",
+                                ret,
                                 {}
                             });
             break;
@@ -569,8 +664,32 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             assert(zero == 0);
 
             auto invokeDyn = std::get<InvokeDynamic>(constantPool[id]);
+            auto tpl = callbacksMethods[invokeDyn.bootstrap_method_attr_index];
+            if (tpl.contains(0x02))
+            {
+                assert(false);
+            }
+            if (tpl.contains(0x01))
+            {
+                std::string newTpl = "\"";
 
-            stack.push_back(callbacksMethods[invokeDyn.bootstrap_method_attr_index]);
+                for (auto c : tpl)
+                {
+                    if (c == 0x01)
+                    {
+                        auto var = stack.back();
+                        stack.pop_back();
+                        newTpl += fmt::format("\" + {} + \"", var);
+                    }
+                    else
+                    {
+                        newTpl += c;
+                    }
+                }
+                newTpl += "\"";
+                tpl = newTpl;
+            }
+            stack.push_back(tpl);
             break;
         }
         case newarray:
@@ -579,11 +698,36 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             stack.pop_back();
             auto size = std::stoi(val);
             auto type = r8();
-            //assert(type == T_INT);
 
             lines.push_back(Instruction {
                                 UNDEFINED_POSITION,
                                 fmt::format("{} array_0x{:x}[{}];", getType(type), position, size),
+                                {}
+                            });
+            stack.push_back(fmt::format("array_0x{:x}", position));
+            break;
+        }
+        case anewarray:
+        {
+            auto val = stack.back();
+            stack.pop_back();
+            auto size = std::stoi(val);
+            auto type = r16();
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[type]).name_index);
+
+            std::string cppType;
+            if (className == "java/lang/String")
+            {
+                cppType = "std::string";
+            }
+            else
+            {
+                assert(false);
+            }
+
+            lines.push_back(Instruction {
+                                UNDEFINED_POSITION,
+                                fmt::format("{} array_0x{:x}[{}];", cppType, position, size),
                                 {}
                             });
             stack.push_back(fmt::format("array_0x{:x}", position));

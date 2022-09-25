@@ -21,6 +21,7 @@ u4 countArgs(std::string str)
             break;
         case 'I':
         case 'Z':
+        case 'F':
             ++count;
             break;
         default:
@@ -51,20 +52,59 @@ std::string getStringFromUtf8(int index)
 
 int main(int argc, char** argv)
 {
-    std::string filename = "Tiny2040blinky.class";
+    std::string filename;
     if (argc > 1)
     {
         filename = argv[1];
+        if (!filename.ends_with(".java"))
+        {
+            fmt::print("{} is not a valid .java file!\n", filename);
+            return 0;
+        }
     }
-    fmt::print("project: {}\n", filename);
+    else
+    {
+        for (auto const& dir_entry : std::filesystem::directory_iterator{"."})
+        {
+            if (dir_entry.is_regular_file())
+            {
+                auto filename_entry = dir_entry.path().filename().string();
+                if (filename_entry.ends_with(".java"))
+                {
+                    if (!filename.empty())
+                    {
+                        fmt::print("More than 1 .java file detected. Aborting.\n");
+                        return 0;
+                    }
+                    filename = filename_entry;
+                }
+            }
+        }
+    }
+
+    if (filename.empty())
+    {
+        fmt::print("No .java file detected. Aborting.\n");
+        return 0;
+    }
+
+    int r = system(fmt::format("javac {}", filename).data());
+
+    if (r != 0)
+    {
+        fmt::print("The .java has errors. Aborting.\n");
+        return 0;
+    }
 
     std::string project_name = filename.substr(0, filename.find('.'));
 
-    std::ifstream file(filename, std::ios::binary);
+    std::ifstream file(project_name + ".class", std::ios::binary);
 
     file.seekg(0, std::ios::end);
     auto fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
+
+    assert(fileSize > 0);
 
     Buffer buffer(fileSize);
     file.read((char*) &buffer[0], fileSize);
@@ -100,8 +140,11 @@ int main(int argc, char** argv)
             assert(false);
             break;
         case CONSTANT_Float:
-            assert(false);
+        {
+            Float info { r32() };
+            constantPool.push_back(info);
             break;
+        }
         case CONSTANT_Long:
             assert(false);
             break;
@@ -115,8 +158,11 @@ int main(int argc, char** argv)
             break;
         }
         case CONSTANT_String:
-            assert(false);
+        {
+            String info { r16() };
+            constantPool.push_back(info);
             break;
+        }
         case CONSTANT_Fieldref:
         {
             Fieldref info { r16(), r16() };
@@ -296,14 +342,22 @@ int main(int argc, char** argv)
 
             for (u2 ii = 0; ii < num_bootstrap_methods; ++ii)
             {
-                [[maybe_unused]] u2 bootstrap_method_ref = r16();
+                u2 bootstrap_method_ref = r16();
+                auto bootstrap_method_handle = std::get<MethodHandle>(constantPool[bootstrap_method_ref]);
+                auto bootstrap_method = std::get<Methodref>(constantPool[bootstrap_method_handle.reference_index]);
+                auto bootstrap_className = getStringFromUtf8(std::get<Class>(constantPool[bootstrap_method.class_index]).name_index);
+                auto bootstrap_descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[bootstrap_method.name_and_type_index]).descriptor_index);
+                auto bootstrap_methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[bootstrap_method.name_and_type_index]).name_index);
+
+                std::vector<std::string> args;
                 u2 num_bootstrap_arguments = r16();
                 for (u2 arg = 0; arg < num_bootstrap_arguments; ++arg)
                 {
                     u2 bootstrap_argument = r16();
-                    if (std::holds_alternative<MethodHandle>(constantPool[bootstrap_argument]))
+                    auto bootstrap_pool = constantPool[bootstrap_argument];
+                    if (std::holds_alternative<MethodHandle>(bootstrap_pool))
                     {
-                        auto handle = std::get<MethodHandle>(constantPool[bootstrap_argument]);
+                        auto handle = std::get<MethodHandle>(bootstrap_pool);
                         assert(handle.reference_kind == REF_invokeStatic);
 
                         auto method = std::get<Methodref>(constantPool[handle.reference_index]);
@@ -320,8 +374,26 @@ int main(int argc, char** argv)
                         auto fullName = fmt::format("{}{}::{}", caster, className, methodName);
                         boost::replace_all(fullName, "/"s, "::"s);
 
-                        callbacksMethods.push_back(fullName);
+                        args.push_back(fullName);
                     }
+                    else if (std::holds_alternative<String>(bootstrap_pool))
+                    {
+                        auto data = std::get<String>(bootstrap_pool);
+                        auto str = getStringFromUtf8(data.string_index);
+                        args.push_back(str);
+                    }
+                    else
+                    {
+                        assert(false);
+                    }
+                    {
+
+                    }
+                }
+
+                if (bootstrap_methodName == "makeConcatWithConstants")
+                {
+                    callbacksMethods.push_back(args[0]);
                 }
             }
         }
@@ -501,6 +573,7 @@ Board getBoardTypeFromString(std::string board_name)
     if (board_name == "picow")        return Board::PicoW;
     if (board_name == "tiny2040")     return Board::Tiny2040;
     if (board_name == "tiny2040_2mb") return Board::Tiny2040_2mb;
+    if (board_name == "badger2040")   return Board::Badger2040;
 
     assert(false);
 }

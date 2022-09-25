@@ -1,7 +1,8 @@
 TEMPLATE = app
-CONFIG += console c++2a
+CONFIG += console
 CONFIG -= app_bundle
 CONFIG -= qt
+QMAKE_CXXFLAGS += -std=c++2b
 
 LIBS += -lfmt
 DESTDIR = bin
@@ -10,8 +11,6 @@ SOURCES += \
         boards/pico.cpp \
         lineanalyser.cpp \
         main.cpp
-
-#QMAKE_POST_LINK += javac Pouet.java && mv Pouet.class bin
 
 HEADERS += \
     boards/pico.h \

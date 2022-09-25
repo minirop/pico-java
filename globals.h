@@ -56,8 +56,12 @@ enum
     iconst_3 = 0x06,
     iconst_4 = 0x07,
     iconst_5 = 0x08,
+    fconst_0 = 0x0b,
+    fconst_1 = 0x0c,
+    fconst_2 = 0x0d,
     bipush = 0x10,
     sipush = 0x11,
+    ldc = 0x12,
     iload = 0x15,
     iload_0 = 0x1a,
     iload_1 = 0x1b,
@@ -78,27 +82,36 @@ enum
     astore_2 = 0x4d,
     astore_3 = 0x4e,
     iastore = 0x4f,
+    aastore = 0x53,
     pop = 0x57,
     dup_ = 0x59,
     iadd = 0x60,
     irem = 0x70,
     ishl = 0x78,
+    iand = 0x7e,
     iinc = 0x84,
+    ifeq = 0x99,
     ifne = 0x9a,
+    iflt = 0x9b,
+    ifge = 0x9c,
+    ifgt = 0x9d,
+    ifle = 0x9e,
     if_icmpeq = 0x9f,
     if_icmpne = 0xa0,
     if_icmplt = 0xa1,
     if_icmpge = 0xa2,
     if_icmpgt = 0xa3,
     if_icmple = 0xa4,
+    if_acmpeq = 0xa5,
+    if_acmpne = 0xa6,
     goto_ = 0xa7,
-    iand = 0x7e,
     return_ = 0xb1,
     getstatic = 0xb2,
     putstatic = 0xb3,
     invokestatic = 0xb8,
     invokedynamic = 0xba,
     newarray = 0xbc,
+    anewarray = 0xbd,
     arraylength = 0xbe,
 };
 
@@ -153,6 +166,7 @@ enum class Board
     PicoW,
     Tiny2040,
     Tiny2040_2mb,
+    Badger2040,
 };
 
 struct Fieldref
@@ -190,6 +204,16 @@ struct Class
     u2 name_index;
 };
 
+struct String
+{
+    u2 string_index;
+};
+
+struct Float
+{
+    u4 bytes;
+};
+
 struct NameAndType
 {
     u2 name_index;
@@ -218,7 +242,16 @@ struct method_info
     std::vector<attribute_info> attributes;
 };
 
-using Constant = std::variant<Fieldref, Methodref, InterfaceMethodref, Class, NameAndType, Utf8, InvokeDynamic, MethodHandle>;
+using Constant = std::variant<Fieldref
+                            , Methodref
+                            , InterfaceMethodref
+                            , Class
+                            , NameAndType
+                            , Utf8
+                            , InvokeDynamic
+                            , MethodHandle
+                            , String
+                            , Float>;
 using ConstantPool = std::vector<Constant>;
 extern ConstantPool constantPool;
 extern std::vector<std::string> callbacksMethods;

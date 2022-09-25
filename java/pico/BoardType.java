@@ -5,5 +5,6 @@ public enum BoardType
 	Pico,
 	PicoW,
 	Tiny2040,
-	Tiny2040_2mb
+	Tiny2040_2mb,
+	Badger2040,
 }
