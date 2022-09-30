@@ -3,6 +3,6 @@
 
 #include "globals.h"
 
-std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<u2> lineNumbers);
+std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<std::tuple<u2, u2>> lineNumbers);
 
 #endif // LINEANALYSER_H

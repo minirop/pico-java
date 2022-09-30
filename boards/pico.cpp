@@ -82,6 +82,8 @@ void build_pico(std::string project_name, Board board)
         {
             output_c << "\t" << project_name << "::static_init();\n";
         }
+
+        int depth = 0;
         for (auto & inst : func.instructions)
         {
             if (inst.label.has_value())
@@ -89,7 +91,12 @@ void build_pico(std::string project_name, Board board)
                 output_c << inst.label.value() << ":\n";
             }
 
-            output_c << '\t' << inst.opcode << '\n';
+            if (inst.opcode == "}") --depth;
+            if (inst.opcode.size())
+            {
+                output_c << std::string(depth + 1, '\t') << inst.opcode << '\n';
+            }
+            if (inst.opcode == "{") ++depth;
         }
         output_c << "}\n";
 

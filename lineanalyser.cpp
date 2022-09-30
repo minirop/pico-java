@@ -1,6 +1,8 @@
 #include "lineanalyser.h"
 #include <bit>
 #include <endian.h>
+#include <optional>
+#include <type_traits>
 #include <cassert>
 
 using namespace std::string_literals;
@@ -28,10 +30,10 @@ std::string getType(int type)
     case T_CHAR:    return "char";
     case T_FLOAT:   return "float";
     case T_DOUBLE:  return "double";
-    case T_BYTE:    return "int8_t";
-    case T_SHORT:   return "int16_t";
-    case T_INT:     return "int32_t";
-    case T_LONG:    return "int64_t";
+    case T_BYTE:    return "char";
+    case T_SHORT:   return "short";
+    case T_INT:     return "int";
+    case T_LONG:    return "long";
     }
 
     assert(false);
@@ -44,30 +46,6 @@ std::vector<Instruction> insts;
 std::unordered_map<u4, u4> closingBraces;
 std::set<u4> skippedGotos;
 Buffer * fullBuffer = nullptr;
-std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<u2> lineNumbers)
-{
-    insts.clear();
-    localsTypes.push_back({});
-    closingBraces.clear();
-
-    fullBuffer = &buffer;
-
-    for (size_t i = 0; i < lineNumbers.size(); ++i)
-    {
-        auto begin = lineNumbers[i];
-        auto end = (i + 1 < lineNumbers.size() ? lineNumbers[i + 1] : buffer.size());
-        auto sub = Buffer(&buffer[begin], &buffer[end]);
-
-        auto ret = decodeBytecodeLine(sub, name, begin);
-        insts.insert(
-                    insts.end(),
-                    std::make_move_iterator(ret.begin()),
-                    std::make_move_iterator(ret.end())
-                    );
-    }
-
-    return insts;
-}
 
 int findLocal(int index)
 {
@@ -82,30 +60,200 @@ int findLocal(int index)
     return T_NONE;
 }
 
-bool previousWasElse = false;
-std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position)
+std::vector<std::tuple<u2, u2>> * lines = nullptr;
+
+u2 getLineFromOpcode(u2 opcode)
 {
-    std::vector<Instruction> lines;
-    std::vector<std::string> stack;
+    auto & lineNumbers = *lines;
 
-    auto buffer_size = buffer.size();
-
-    if (closingBraces.contains(position))
+    for (size_t i = 0; i < lineNumbers.size() - 1; ++i)
     {
-        auto count = closingBraces[position];
-        while (count > 0)
+        auto pc = std::get<0>(lineNumbers[i]);
+        auto nb = std::get<1>(lineNumbers[i]);
+        if (opcode <= pc)
         {
-
-            lines.push_back(Instruction {
-                                UNDEFINED_POSITION,
-                                "}",
-                                {}
-                            });
-            if (localsTypes.size())
-                localsTypes.pop_back();
-            --count;
+            return nb;
         }
     }
+
+    return std::get<1>(lineNumbers[lineNumbers.size() - 1]);
+}
+
+u2 getOpcodeFromLine(u2 opcode)
+{
+    for (auto & l : *lines)
+    {
+        if (std::get<1>(l) == opcode)
+        {
+            return std::get<0>(l);
+        }
+    }
+
+    assert(false);
+}
+
+std::multiset<u4> closingBrackets, elseStmts;
+std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<std::tuple<u2, u2>> lineNumbers)
+{
+    insts.clear();
+    localsTypes.clear();
+    localsTypes.push_back({});
+    closingBraces.clear();
+
+    fullBuffer = &buffer;
+    lines = &lineNumbers;
+
+    std::unordered_map<int, Buffer> buffers;
+    std::set<int> order;
+    for (size_t i = 0; i < lineNumbers.size(); ++i)
+    {
+        auto begin = std::get<0>(lineNumbers[i]);
+        auto end = (i + 1 < lineNumbers.size() ? std::get<0>(lineNumbers[i + 1]) : buffer.size());
+        auto sub = Buffer(&buffer[begin], &buffer[end]);
+
+        auto line = std::get<1>(lineNumbers[i]);
+        buffers[line].insert(
+                    buffers[line].end(),
+                    std::make_move_iterator(sub.begin()),
+                    std::make_move_iterator(sub.end())
+                    );
+        order.insert(line);
+    }
+
+    for (auto key : order)
+    {
+        auto ret = decodeBytecodeLine(buffers[key], name, key);
+        insts.insert(
+                    insts.end(),
+                    std::make_move_iterator(ret.begin()),
+                    std::make_move_iterator(ret.end())
+                    );
+    }
+
+    assert(closingBrackets.size() == 0);
+
+    return insts;
+}
+
+struct Array
+{
+    size_t size;
+    std::string type;
+};
+
+using Value = std::variant<int, long, float, double, std::string, Array>;
+std::vector<Value> stack;
+template<class> inline constexpr bool always_false_v = false;
+
+std::string getAsString(const Value & value)
+{
+    return std::visit([](auto&& arg) {
+        using T = std::decay_t<decltype(arg)>;
+
+        if constexpr (std::is_same_v<T, int>)
+        {
+            return fmt::format("{}", arg);
+        }
+        else if constexpr (std::is_same_v<T, long>)
+        {
+            return fmt::format("{}", arg);
+        }
+        else if constexpr (std::is_same_v<T, float>)
+        {
+            return fmt::format("{}", arg);
+        }
+        else if constexpr (std::is_same_v<T, double>)
+        {
+            return fmt::format("{}", arg);
+        }
+        else if constexpr (std::is_same_v<T, std::string>)
+        {
+            return arg;
+        }
+        else if constexpr (std::is_same_v<T, Array>)
+        {
+            return std::string{};
+        }
+        else
+        {
+            static_assert(always_false_v<T>, "non-exhaustive visitor!");
+        }
+    }, value);
+}
+
+enum class OpType
+{
+    Store,
+    Cond,
+    Inc,
+    Jump,
+    IndexedStore,
+    Return,
+    Call,
+};
+
+struct Operation
+{
+    OpType type;
+
+    struct
+    {
+        std::optional<std::string> type;
+        std::optional<int> size;
+        int index;
+        std::optional<std::string> value;
+    } store;
+
+    struct
+    {
+        std::string left;
+        std::string right;
+        u4 absolute;
+        std::string op;
+    } cond;
+
+    struct
+    {
+        int index;
+        int constant;
+    } inc;
+
+    struct
+    {
+        u4 absolute;
+    } jump;
+
+    struct
+    {
+        std::string array;
+        std::string index;
+        std::string value;
+    } istore;
+
+    struct
+    {
+        std::optional<std::string> value;
+    } ret;
+
+    struct
+    {
+        std::string code;
+    } call;
+};
+
+std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & addOpeningParen);
+
+std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position)
+{
+    assert(sizeof(int) != sizeof(long));
+
+    auto buffer_size = buffer.size();
+    auto start_pc = getOpcodeFromLine(position);
+
+    std::vector<Operation> operations;
+    std::vector<Instruction> insts = { Instruction() };
+    Instruction & inst = insts.front();
+    inst.position = position;
 
     while (buffer.size())
     {
@@ -113,224 +261,34 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
 
         switch (opcode)
         {
-        case iconst_0:
-        case iconst_1:
-        case iconst_2:
-        case iconst_3:
-        case iconst_4:
-        case iconst_5:
-        {
-            stack.push_back(fmt::format("{}", opcode - iconst_0));
-            break;
-        }
-        case fconst_0:
-        case fconst_1:
-        case fconst_2:
-        {
-            stack.push_back(fmt::format("{}f", opcode - fconst_0));
-            break;
-        }
-        case getstatic:
-        {
-            auto id = r16();
-            auto method = std::get<Fieldref>(constantPool[id]);
-            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
-            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
-            auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
-
-            auto fullName = fmt::format("{}::{}", className, variableName);
-            boost::replace_all(fullName, "/"s, "::"s);
-
-            stack.push_back(fullName);
-            break;
-        }
-        case putstatic:
-        {
-            auto id = r16();
-            auto method = std::get<Fieldref>(constantPool[id]);
-            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
-            auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
-            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
-
-            auto fullName = fmt::format("{}::{}", className, variableName);
-            boost::replace_all(fullName, "/"s, "::"s);
-
-            if (descriptor == "I")
-            {
-                auto val = stack.back();
-                lines.push_back(Instruction {
-                                    position,
-                                    fmt::format("{} = {};", fullName, val),
-                                    {}
-                                });
-                stack.pop_back();
-            }
-            else
-            {
-                assert(false);
-            }
-            break;
-        }
-        case invokestatic:
-        {
-            auto id = r16();
-            auto method = std::get<Methodref>(constantPool[id]);
-            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
-            auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
-            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
-            auto fullName = fmt::format("{}::{}", className, methodName);
-            boost::replace_all(fullName, "/"s, "::"s);
-
-            std::string argsString;
-            auto argsCount = countArgs(descriptor);
-            if (argsCount && argsCount <= stack.size())
-            {
-                auto offset = stack.size() - argsCount;
-                for (size_t idx = 0; idx < argsCount; ++idx)
-                {
-                    argsString += fmt::format(", {}", stack[offset + idx]);
-                }
-
-                argsString = argsString.substr(2);
-
-                auto tmpArgsCount = argsCount;
-                while (tmpArgsCount > 0)
-                {
-                    --tmpArgsCount;
-                    stack.pop_back();
-                }
-            }
-
-            auto callString = fmt::format("{}({})", fullName, argsString);
-            auto retType = getReturnType(descriptor);
-            if (retType.size() && retType != "void")
-            {
-                stack.push_back(callString);
-            }
-            else
-            {
-                lines.push_back(Instruction {
-                                    position,
-                                    callString + ";",
-                                    {}
-                                });
-            }
-            break;
-        }
         case bipush:
         {
             auto value = r8();
-            stack.push_back(fmt::format("{}", value));
+            stack.push_back(value);
             break;
         }
-        case sipush:
+        case anewarray:
         {
-            auto value = r16();
-            stack.push_back(fmt::format("{}", value));
-            break;
-        }
-        case ldc:
-        {
-            auto index = r8();
-            auto constant = constantPool[index];
+            auto val = stack.back();
+            stack.pop_back();
+            auto size = std::get<int>(val);
+            auto type = r16();
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[type]).name_index);
 
-            if (std::holds_alternative<String>(constant))
+            std::string cppType;
+            if (className == "java/lang/String")
             {
-                auto data = std::get<String>(constant);
-                auto str = getStringFromUtf8(data.string_index);
-                stack.push_back(fmt::format("\"{}\"", str));
-            }
-            else if (std::holds_alternative<Float>(constant))
-            {
-                auto data = std::get<Float>(constant);
-                float f = std::bit_cast<float>(data.bytes);
-                stack.push_back(fmt::format("{}f", f));
+                cppType = "std::string";
             }
             else
             {
                 assert(false);
             }
-            break;
-        }
-        case iload:
-        {
-            auto index = r8();
-            stack.push_back(fmt::format("ilocal_{}", index));
-            break;
-        }
-        case iload_0:
-        case iload_1:
-        case iload_2:
-        case iload_3:
-        {
-            int index = opcode - iload_0;
-            stack.push_back(fmt::format("ilocal_{}", index));
-            break;
-        }
-        case aload_0:
-        case aload_1:
-        case aload_2:
-        case aload_3:
-        {
-            int index = opcode - aload_0;
-            stack.push_back(fmt::format("alocal_{}", index));
-            break;
-        }
-        case iaload:
-        {
-            auto index = stack.back();
-            stack.pop_back();
-            auto array = stack.back();
-            stack.pop_back();
 
-            stack.push_back(fmt::format("{}[{}]", array, index));
-            break;
-        }
-        case istore:
-        {
-            auto v = stack.back();
-            stack.pop_back();
-
-            auto index = r8();
-            std::string type;
-
-            auto & locals = localsTypes.back();
-            auto localType = findLocal(index);
-            if (localType != T_INT)
-            {
-                type = getType(T_INT);
-                locals[index] = T_INT;
-            }
-            lines.push_back(Instruction {
-                                UNDEFINED_POSITION,
-                                fmt::format("{} ilocal_{} = {};", type, index, v),
-                                {}
-                            });
-            break;
-        }
-        case istore_0:
-        case istore_1:
-        case istore_2:
-        case istore_3:
-        {
-            auto v = stack.back();
-            stack.pop_back();
-
-            int index = opcode - istore_0;
-            std::string type;
-
-            auto & locals = localsTypes.back();
-            auto localType = findLocal(index);
-            if (localType != T_INT)
-            {
-                type = getType(T_INT);
-                locals[index] = T_INT;
-            }
-            lines.push_back(Instruction {
-                                UNDEFINED_POSITION,
-                                fmt::format("{} ilocal_{} = {};", type, index, v),
-                                {}
-                            });
+            Array arr;
+            arr.size = size;
+            arr.type = cppType;
+            stack.push_back(arr);
             break;
         }
         case astore_0:
@@ -344,149 +302,121 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto & locals = localsTypes.back();
             auto localType = findLocal(index);
 
-            std::string output;
-            if (v.starts_with("array_"))
+            Operation op;
+            op.type = OpType::Store;
+            op.store.index = index;
+
+            if (std::holds_alternative<Array>(v))
             {
+                auto arr = std::get<Array>(v);
+
+                op.store.size = arr.size;
+                op.store.type = arr.type;
+
                 if (localType != T_ARRAY)
                 {
-                    output = "auto";
                     locals[index] = T_ARRAY;
                 }
+                else
+                {
+                    assert(false);
+                }
             }
-            else
+            else if (std::holds_alternative<std::string>(v))
             {
+                auto str = std::get<std::string>(v);
                 if (localType != T_STRING)
                 {
-                    output = "std::string";
+                    op.store.type = "std::string";
                     locals[index] = T_STRING;
                 }
             }
 
-            lines.push_back(Instruction {
-                                UNDEFINED_POSITION,
-                                fmt::format("{} alocal_{} = {};", output, index, v),
-                                {}
-                            });
+            operations.push_back(op);
             break;
         }
-        case iastore:
-        case aastore:
+        case iconst_0:
+        case iconst_1:
+        case iconst_2:
+        case iconst_3:
+        case iconst_4:
+        case iconst_5:
         {
-            auto value = stack.back();
-            stack.pop_back();
-            auto index = stack.back();
-            stack.pop_back();
-            auto arr = stack.back();
+            stack.push_back(opcode - iconst_0);
+            break;
+        }
+        case fconst_0:
+        case fconst_1:
+        case fconst_2:
+        {
+            stack.push_back(static_cast<float>(opcode - fconst_0));
+            break;
+        }
+        case istore:
+        case istore_0:
+        case istore_1:
+        case istore_2:
+        case istore_3:
+        {
+            auto v = stack.back();
             stack.pop_back();
 
-            lines.push_back(Instruction {
-                                position,
-                                fmt::format("{}[{}] = {};", arr, index, value),
-                                {}
-                            });
+            int index;
+            if (opcode == istore)
+            {
+                index = r8();
+            }
+            else
+            {
+                index = opcode - istore_0;
+            }
+
+            Operation op;
+            op.type = OpType::Store;
+            op.store.index = index;
+
+            auto & locals = localsTypes.back();
+            auto localType = findLocal(index);
+            if (localType != T_INT)
+            {
+                op.store.type = getType(T_INT);
+                locals[index] = T_INT;
+            }
+
+            op.store.value = getAsString(v);
+
+            operations.push_back(op);
             break;
         }
-        case pop:
+        case iload:
         {
-            stack.pop_back();
+            auto index = r8();
+            stack.push_back(fmt::format("local_{}", index));
             break;
         }
-        case dup_:
+        case iload_0:
+        case iload_1:
+        case iload_2:
+        case iload_3:
+        {
+            int index = opcode - iload_0;
+            stack.push_back(fmt::format("local_{}", index));
+            break;
+        }
+        case aload_0:
+        case aload_1:
+        case aload_2:
+        case aload_3:
+        {
+            int index = opcode - aload_0;
+            stack.push_back(fmt::format("alocal_{}", index));
+            break;
+        }
+        case arraylength:
         {
             auto val = stack.back();
-            stack.push_back(val);
-            break;
-        }
-        case iadd:
-        {
-            auto right = stack.back();
             stack.pop_back();
-            auto left = stack.back();
-            stack.pop_back();
-
-            stack.push_back(fmt::format("({} + {})", left, right));
-            break;
-        }
-        case irem:
-        {
-            auto right = stack.back();
-            stack.pop_back();
-            auto left = stack.back();
-            stack.pop_back();
-
-            stack.push_back(fmt::format("({} % {})", left, right));
-            break;
-        }
-        case ishl:
-        {
-            auto right = stack.back();
-            stack.pop_back();
-            auto left = stack.back();
-            stack.pop_back();
-
-            stack.push_back(fmt::format("({} << {})", left, right));
-            break;
-        }
-        case iinc:
-        {
-            auto value = r8();
-            auto inc = r8();
-
-            lines.push_back(Instruction {
-                                position,
-                                fmt::format("ilocal_{} += {};", value, inc),
-                                {}
-                            });
-            break;
-        }
-        case ifeq:
-        case ifne:
-        case iflt:
-        case ifge:
-        case ifgt:
-        case ifle:
-        {
-            previousWasElse = false;
-
-            auto correction = buffer_size - buffer.size() - 1;
-            auto offset = s16();
-            auto absolute = position + correction + offset;
-
-            auto value = stack.back();
-            stack.pop_back();
-
-            std::string op;
-            switch (opcode)
-            {
-            case ifeq: op = "!="; break;
-            case ifne: op = "=="; break;
-            case iflt: op = ">="; break;
-            case ifge: op =  "<"; break;
-            case ifgt: op = "<="; break;
-            case ifle: op =  ">"; break;
-            default: assert(false);
-            }
-
-            std::string keyword = "if";
-            if ((*fullBuffer)[absolute - 3] == goto_)
-            {
-                keyword = "while";
-                skippedGotos.insert(absolute - 3);
-            }
-
-            lines.push_back(Instruction {
-                                position,
-                                fmt::format("{} ({} {} 0) {{", keyword, value, op),
-                                {}
-                            });
-
-            if (!closingBraces.contains(absolute))
-            {
-                closingBraces[absolute] = 0;
-            }
-            closingBraces[absolute]++;
-
-            localsTypes.push_back({});
+            stack.push_back(fmt::format("{}.length()", std::get<std::string>(val)));
             break;
         }
         case if_icmpeq:
@@ -498,163 +428,59 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         case if_acmpeq:
         case if_acmpne:
         {
-            previousWasElse = false;
-
             auto correction = buffer_size - buffer.size() - 1;
             auto offset = s16();
-            auto absolute = position + correction + offset;
+            auto absolute = start_pc + correction + offset;
 
             auto right = stack.back();
             stack.pop_back();
             auto left = stack.back();
             stack.pop_back();
 
-            std::string op;
+            std::string binop;
             switch (opcode)
             {
-            case if_icmpeq: op = "!="; break;
-            case if_icmpne: op = "=="; break;
-            case if_icmplt: op = ">="; break;
-            case if_icmpge: op =  "<"; break;
-            case if_icmpgt: op = "<="; break;
-            case if_icmple: op =  ">"; break;
-            case if_acmpeq: op = "!="; break;
-            case if_acmpne: op = "=="; break;
+            case if_icmpeq: binop = "!="; break;
+            case if_icmpne: binop = "=="; break;
+            case if_icmplt: binop = ">="; break;
+            case if_icmpge: binop =  "<"; break;
+            case if_icmpgt: binop = "<="; break;
+            case if_icmple: binop =  ">"; break;
+            case if_acmpeq: binop = "!="; break;
+            case if_acmpne: binop = "=="; break;
             default: assert(false);
             }
 
-            std::string keyword = "if";
-            if ((*fullBuffer)[absolute - 3] == goto_)
-            {
-                keyword = "while";
-                skippedGotos.insert(absolute - 3);
-            }
 
-            lines.push_back(Instruction {
-                                position,
-                                fmt::format("{} ({} {} {}) {{", keyword, left, op, right),
-                                {}
-                            });
+            Operation op;
+            op.type = OpType::Cond;
+            op.cond.op = binop;
+            op.cond.left = getAsString(left);
+            op.cond.right = getAsString(right);
+            op.cond.absolute = absolute;
 
-            if (!closingBraces.contains(absolute))
-            {
-                closingBraces[absolute] = 0;
-            }
-            closingBraces[absolute]++;
-
-            localsTypes.push_back({});
+            operations.push_back(op);
+            break;
+        }
+        case iinc:
+        {
+            Operation op;
+            op.type = OpType::Inc;
+            op.inc.index = r8();
+            op.inc.constant = r8();
+            operations.push_back(op);
             break;
         }
         case goto_:
         {
             auto correction = buffer_size - buffer.size() - 1;
             auto offset = s16();
-            auto absolute = position + correction + offset;
+            auto absolute = start_pc + correction + offset;
 
-            if (skippedGotos.contains(position + correction))
-            {
-                break;
-            }
-
-            if (offset < 0)
-            {
-                bool found = false;
-                for (u4 iii = 0; iii < insts.size() && !found; ++iii)
-                {
-                    if (insts[iii].position == absolute)
-                    {
-                        insts.insert(insts.begin() + iii, Instruction {
-                                         UNDEFINED_POSITION,
-                                         "while (true) {",
-                                         {}
-                                     });
-                        found = true;
-                    }
-                }
-
-                if (!found)
-                {
-                    for (u4 iii = 0; iii < lines.size() && !found; ++iii)
-                    {
-                        if (lines[iii].position == absolute)
-                        {
-                            lines.insert(lines.begin() + iii, Instruction {
-                                             UNDEFINED_POSITION,
-                                             "while (true) {",
-                                             {}
-                                         });
-                            found = true;
-                        }
-                    }
-                }
-                if (found)
-                {
-                    lines.push_back(Instruction {
-                                        UNDEFINED_POSITION,
-                                        "}",
-                                        {}
-                                    });
-                }
-            }
-            else
-            {
-                if (previousWasElse)
-                {
-                    lines.push_back(Instruction {
-                                        UNDEFINED_POSITION,
-                                        "}",
-                                        {}
-                                    });
-                    closingBraces[absolute]--;
-                    localsTypes.pop_back();
-                }
-                lines.push_back(Instruction {
-                                    UNDEFINED_POSITION,
-                                    fmt::format("}} else {{"),
-                                    {}
-                                });
-                previousWasElse = true;
-                if (!closingBraces.contains(absolute))
-                {
-                    closingBraces[absolute] = 0;
-                }
-                closingBraces[absolute]++;
-
-                if (closingBraces.contains(position + correction + 3))
-                {
-                    closingBraces[position + correction + 3] = 0;
-                }
-
-                if (localsTypes.size())
-                    localsTypes.pop_back();
-                localsTypes.push_back({});
-            }
-            break;
-        }
-        case iand:
-        {
-            auto right = stack.back();
-            stack.pop_back();
-            auto left = stack.back();
-            stack.pop_back();
-
-            stack.push_back(fmt::format("({} & {})", left, right));
-            break;
-        }
-        case return_:
-        {
-            assert (stack.size() == 0);
-
-            std::string ret = "return;";
-            if (name == "main")
-            {
-                ret = "return 0;";
-            }
-            lines.push_back(Instruction {
-                                position,
-                                ret,
-                                {}
-                            });
+            Operation op;
+            op.type = OpType::Jump;
+            op.jump.absolute = absolute;
+            operations.push_back(op);
             break;
         }
         case invokedynamic:
@@ -679,7 +505,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                     {
                         auto var = stack.back();
                         stack.pop_back();
-                        newTpl += fmt::format("\" + {} + \"", var);
+                        newTpl += fmt::format("\" + {} + \"", getAsString(var));
                     }
                     else
                     {
@@ -687,57 +513,114 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                     }
                 }
                 newTpl += "\"";
+
+                if (newTpl.starts_with("\"\" + "))
+                {
+                    newTpl = newTpl.substr(5);
+                }
+
+                if (newTpl.ends_with(" + \"\""))
+                {
+                    newTpl = newTpl.substr(0, newTpl.size() - 5);
+                }
                 tpl = newTpl;
             }
             stack.push_back(tpl);
             break;
         }
-        case newarray:
+        case iastore:
+        case aastore:
         {
-            auto val = stack.back();
+            auto value = stack.back();
             stack.pop_back();
-            auto size = std::stoi(val);
-            auto type = r8();
+            auto index = stack.back();
+            stack.pop_back();
+            auto arr = stack.back();
+            stack.pop_back();
 
-            lines.push_back(Instruction {
-                                UNDEFINED_POSITION,
-                                fmt::format("{} array_0x{:x}[{}];", getType(type), position, size),
-                                {}
-                            });
-            stack.push_back(fmt::format("array_0x{:x}", position));
+            Operation op;
+            op.type = OpType::IndexedStore;
+            op.istore.index = getAsString(index);
+            op.istore.array = getAsString(arr);
+            op.istore.value = getAsString(value);
+
+            operations.push_back(op);
             break;
         }
-        case anewarray:
+        case return_:
         {
-            auto val = stack.back();
-            stack.pop_back();
-            auto size = std::stoi(val);
-            auto type = r16();
-            auto className = getStringFromUtf8(std::get<Class>(constantPool[type]).name_index);
-
-            std::string cppType;
-            if (className == "java/lang/String")
+            Operation op;
+            op.type = OpType::Return;
+            if (name == "main")
             {
-                cppType = "std::string";
+                op.ret.value = "0";
+            }
+            operations.push_back(op);
+            break;
+        }
+        case imul:
+        {
+            auto right = stack.back();
+            stack.pop_back();
+            auto left = stack.back();
+            stack.pop_back();
+
+            stack.push_back(fmt::format("({} * {})", getAsString(left), getAsString(right)));
+            break;
+        }
+        case iadd:
+        {
+            auto right = stack.back();
+            stack.pop_back();
+            auto left = stack.back();
+            stack.pop_back();
+
+            stack.push_back(fmt::format("({} + {})", getAsString(left), getAsString(right)));
+            break;
+        }
+        case invokestatic:
+        {
+            auto id = r16();
+            auto method = std::get<Methodref>(constantPool[id]);
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
+            auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
+            auto fullName = fmt::format("{}::{}", className, methodName);
+            boost::replace_all(fullName, "/"s, "::"s);
+
+            std::string argsString;
+            auto argsCount = countArgs(descriptor);
+            if (argsCount && argsCount <= stack.size())
+            {
+                auto offset = stack.size() - argsCount;
+                for (size_t idx = 0; idx < argsCount; ++idx)
+                {
+                    argsString += fmt::format(", {}", getAsString(stack[offset + idx]));
+                }
+
+                argsString = argsString.substr(2);
+
+                auto tmpArgsCount = argsCount;
+                while (tmpArgsCount > 0)
+                {
+                    --tmpArgsCount;
+                    stack.pop_back();
+                }
+            }
+
+            auto callString = fmt::format("{}({})", fullName, argsString);
+            auto retType = getReturnType(descriptor);
+            if (retType.size() && retType != "void")
+            {
+                stack.push_back(callString);
             }
             else
             {
-                assert(false);
+                Operation op;
+                op.type = OpType::Call;
+                op.call.code = callString;
+                operations.push_back(op);
             }
-
-            lines.push_back(Instruction {
-                                UNDEFINED_POSITION,
-                                fmt::format("{} array_0x{:x}[{}];", cppType, position, size),
-                                {}
-                            });
-            stack.push_back(fmt::format("array_0x{:x}", position));
-            break;
-        }
-        case arraylength:
-        {
-            auto val = stack.back();
-            stack.pop_back();
-            stack.push_back(fmt::format("{}.length", val));
             break;
         }
         default:
@@ -745,7 +628,278 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         }
     }
 
-    assert(!stack.size());
+    bool addOpeningParen = false;
+    switch (operations.size())
+    {
+    case 1:
+    {
+        auto op = operations[0];
+        inst.opcode = generateCodeFromOperation(op, start_pc, addOpeningParen);
+        break;
+    }
+    case 2:
+    {
+        const auto & o1 = operations[0];
+        const auto & o2 = operations[1];
 
-    return lines;
+        if (o2.type == OpType::Jump)
+        {
+            inst.opcode = generateCodeFromOperation(o1, start_pc, addOpeningParen);
+
+            if (o2.jump.absolute > start_pc)
+            {
+                Instruction tmp;
+                tmp.opcode = generateCodeFromOperation(o1, start_pc, addOpeningParen);
+                insts.push_back(tmp);
+            }
+            else
+            {
+                assert(false);
+            }
+        }
+        else
+        {
+            assert(false);
+        }
+        break;
+    }
+    case 4:
+    {
+        const auto & o1 = operations[0];
+        const auto & o2 = operations[1];
+        const auto & o3 = operations[2];
+        const auto & o4 = operations[3];
+
+        // for loop
+        if (o1.type == OpType::Store && o2.type == OpType::Cond && o3.type == OpType::Inc && o4.type == OpType::Jump)
+        {
+            std::string loop_var_type;
+            if (o1.store.type.has_value())
+            {
+                loop_var_type = o1.store.type.value() + " ";
+            }
+            inst.opcode = fmt::format("for ({0}local_{1} = {2}; {3} {4} {5}; local_{6}",
+                                      loop_var_type, o1.store.index, o1.store.value.value(),
+                                      o2.cond.left, o2.cond.op, o2.cond.right,
+                                      o3.inc.index);
+            if (o3.inc.constant == 1)
+            {
+                inst.opcode += "++";
+            }
+            else
+            {
+                inst.opcode += fmt::format(" += {}", o3.inc.constant);
+            }
+            inst.opcode += ")";
+
+            closingBrackets.insert(getLineFromOpcode(o2.cond.absolute));
+            addOpeningParen = true;
+
+            localsTypes.push_back({});
+        }
+        else
+        {
+            for (auto & op : operations)
+            {
+                fmt::print("{}\n", static_cast<int>(op.type));
+            }
+            assert(false);
+        }
+        break;
+    }
+    default:
+    {
+        assert(false);
+    }
+    }
+
+    for (auto it = begin(elseStmts); it != end(elseStmts);)
+    {
+        if (*it <= position)
+        {
+            Instruction elseStmt;
+            elseStmt.opcode = "{";
+            insts.insert(begin(insts), elseStmt);
+            elseStmt.opcode = "else";
+            insts.insert(begin(insts), elseStmt);
+
+            it = elseStmts.erase(it);
+
+            localsTypes.pop_back();     // remove previous scope
+            localsTypes.push_back({});  // add clean scope
+            localsTypes.push_back({});  // add dummy scope that will get removed next loop
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    for (auto it = begin(closingBrackets); it != end(closingBrackets);)
+    {
+        if (*it <= position)
+        {
+            Instruction closingBracket;
+            closingBracket.opcode = "}";
+            insts.insert(begin(insts), closingBracket);
+            it = closingBrackets.erase(it);
+
+            localsTypes.pop_back();
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    if (addOpeningParen)
+    {
+        Instruction openingBracket;
+        openingBracket.opcode = "{";
+        insts.push_back(openingBracket);
+    }
+
+    return insts;
+}
+
+std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & addOpeningParen)
+{
+    std::string output;
+
+    switch (operation.type)
+    {
+    case OpType::Store:
+    {
+        auto s = operation.store;
+        std::string tmp;
+        if (s.type.has_value())
+        {
+            tmp += s.type.value();
+            tmp += " ";
+        }
+        tmp += fmt::format("local_{}", s.index);
+        if (s.size.has_value())
+        {
+            tmp += fmt::format("[{}]", s.size.value());
+        }
+        else if (s.value.has_value())
+        {
+            tmp += fmt::format(" = {}", s.value.value());
+        }
+
+        output = tmp + ";";
+        break;
+    }
+    case OpType::IndexedStore:
+    {
+        output = fmt::format("{}[{}] = {};", operation.istore.array, operation.istore.index, operation.istore.value);
+        break;
+    }
+    case OpType::Return:
+    {
+        auto & val = operation.ret.value;
+        if (val.has_value())
+        {
+            output = fmt::format("return {};", val.value());
+        }
+        else
+        {
+            output = fmt::format("return;");
+        }
+        break;
+    }
+    case OpType::Cond:
+    {
+        auto & c = operation.cond;
+        auto absolute = c.absolute;
+        auto isGoto = (*fullBuffer)[absolute - 3] == goto_;
+        addOpeningParen = true;
+
+        auto l = c.left;
+        auto binop = c.op;
+        auto r = c.right;
+
+        if (isGoto)
+        {
+            s2 offset = (*fullBuffer)[absolute - 2] << 8 | (*fullBuffer)[absolute - 1];
+            u4 target = absolute - 3 + offset;
+
+            if (target == start_pc)
+            {
+                output = fmt::format("while ({} {} {})", l, binop, r);
+                closingBrackets.insert(getLineFromOpcode(absolute));
+
+                localsTypes.push_back({});
+            }
+            else if (target > start_pc)
+            {
+                output = fmt::format("if ({} {} {})", l, binop, r);
+                closingBrackets.insert(getLineFromOpcode(absolute));
+
+                localsTypes.push_back({});
+            }
+            else
+            {
+                assert(false);
+            }
+        }
+        else
+        {
+            output = fmt::format("if ({} {} {})", l, binop, r);
+            closingBrackets.insert(getLineFromOpcode(absolute));
+        }
+        break;
+    }
+    case OpType::Inc:
+    {
+        if (operation.inc.constant == 1)
+        {
+            output = fmt::format("local_{}++;", operation.inc.index);
+        }
+        else
+        {
+            output = fmt::format("local_{} += {};", operation.inc.index, operation.inc.constant);
+        }
+        break;
+    }
+    case OpType::Jump:
+    {
+        auto abs_line = getLineFromOpcode(operation.jump.absolute);
+        auto curr_line = getLineFromOpcode(start_pc);
+        if (operation.jump.absolute > start_pc)
+        {
+            if (abs_line < curr_line)
+            {
+                for (u4 pos = operation.jump.absolute; pos < fullBuffer->size(); ++pos)
+                {
+                    auto next_line = getLineFromOpcode(pos);
+                    if (next_line > curr_line)
+                    {
+                        abs_line = next_line;
+                        break;
+                    }
+                }
+            }
+
+            assert(abs_line > curr_line);
+
+            elseStmts.insert(curr_line + 1);
+            closingBrackets.insert(abs_line);
+        }
+        else
+        {
+            assert(false);
+        }
+        break;
+    }
+    case OpType::Call:
+    {
+        output = operation.call.code;
+        break;
+    }
+    default:
+        assert(false);
+    }
+
+    return output;
 }

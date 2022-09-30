@@ -431,7 +431,7 @@ int main(int argc, char** argv)
             [[maybe_unused]] u2 catch_type = r16();
         };
 
-        std::vector<u2> lineNumbers;
+        std::vector<std::tuple<u2, u2>> lineNumbers;
 
         u2 attributes_count = r16();
         for (u2 i = 0; i < attributes_count; ++i)
@@ -445,9 +445,9 @@ int main(int argc, char** argv)
                 for (u2 a = 0; a < line_number_table_length; ++a)
                 {
                     u2 start_pc = r16();
-                    [[maybe_unused]] u2 line_number = r16();
+                    u2 line_number = r16();
 
-                    lineNumbers.push_back(start_pc);
+                    lineNumbers.emplace_back(start_pc, line_number);
                 }
             }
             else if (attribute_name == "StackMapTable")

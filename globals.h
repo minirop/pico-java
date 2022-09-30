@@ -86,6 +86,7 @@ enum
     pop = 0x57,
     dup_ = 0x59,
     iadd = 0x60,
+    imul = 0x68,
     irem = 0x70,
     ishl = 0x78,
     iand = 0x7e,
