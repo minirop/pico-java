@@ -344,7 +344,7 @@ std::string get_cmake_board_name(Board board)
     if (board == Board::Tiny2040_2mb) return "pimoroni_tiny2040_2mb";
     if (board == Board::Badger2040)   return "pimoroni_badger2040";
 
-    assert(false);
+    throw fmt::format("Unknown board {}!", std::to_underlying(board));
 }
 
 std::string generateParameters(std::string descriptor)
@@ -352,7 +352,11 @@ std::string generateParameters(std::string descriptor)
     std::string ret;
 
     int count = 0;
-    assert(descriptor[0] == '(');
+    if (descriptor[0] != '(')
+    {
+        throw fmt::format("Invalid descriptor. Should start with '(', got '{}'!", descriptor[0]);
+    }
+
     for (size_t index = 1; index < descriptor.size(); ++index)
     {
         switch (descriptor[index])
@@ -362,7 +366,7 @@ std::string generateParameters(std::string descriptor)
             break;
         case 'L':
             while (descriptor[index] != ';') ++index;
-            assert(false);
+            throw fmt::format("classes are not supported as function arguments.");
             break;
         case 'I':
         case 'Z':
@@ -370,7 +374,7 @@ std::string generateParameters(std::string descriptor)
             ++count;
             break;
         default:
-            assert(false);
+            throw fmt::format("Invalid character in descriptor: '{}'.", descriptor[index]);
         }
     }
 

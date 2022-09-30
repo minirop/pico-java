@@ -7,7 +7,11 @@ using namespace std::string_literals;
 u4 countArgs(std::string str)
 {
     int count = 0;
-    assert(str[0] == '(');
+    if (str[0] != '(')
+    {
+        throw fmt::format("Invalid descriptor. Should start with '(', got '{}'!", str[0]);
+    }
+
     for (size_t index = 1; index < str.size(); ++index)
     {
         switch (str[index])
@@ -25,7 +29,7 @@ u4 countArgs(std::string str)
             ++count;
             break;
         default:
-            assert(false);
+            throw fmt::format("Invalid or unhandled type used as a parameter type: '{}'.", str[index]);
         }
     }
 
@@ -104,13 +108,19 @@ int main(int argc, char** argv)
     auto fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
 
-    assert(fileSize > 0);
+    if (fileSize == 0)
+    {
+        throw fmt::format("File is empty.");
+    }
 
     Buffer buffer(fileSize);
     file.read((char*) &buffer[0], fileSize);
 
     auto magic = r32();
-    assert(magic == 0xCAFEBABE);
+    if (magic != 0xCAFEBABE)
+    {
+        throw fmt::format("Invalid class file. Wrong magic number.");
+    }
 
     [[maybe_unused]] auto minor = r16();
     [[maybe_unused]] auto major = r16();
@@ -137,7 +147,7 @@ int main(int argc, char** argv)
             break;
         }
         case CONSTANT_Integer:
-            assert(false);
+            throw fmt::format("integer constants are not handled.");
             break;
         case CONSTANT_Float:
         {
@@ -146,10 +156,10 @@ int main(int argc, char** argv)
             break;
         }
         case CONSTANT_Long:
-            assert(false);
+            throw fmt::format("long constants are not handled.");
             break;
         case CONSTANT_Double:
-            assert(false);
+            throw fmt::format("double constants are not handled.");
             break;
         case CONSTANT_Class:
         {
@@ -206,15 +216,18 @@ int main(int argc, char** argv)
             break;
         }
         default:
-            assert(false);
+            throw fmt::format("Unknown constant type: '{}'.", tag);
         }
     }
 
     [[maybe_unused]] auto access_flags = r16();
     [[maybe_unused]] auto this_class = r16();
-    [[maybe_unused]] auto super_class = r16();
+    [[maybe_unused]] auto super_class = r16(); // TODO: check if super_class is object
     auto interfaces_count = r16();
-    assert(interfaces_count == 0);
+    if (interfaces_count != 0)
+    {
+        throw fmt::format("The class must not have any interfaces.");
+    }
 
     auto fields_count = r16();
     for (u2 i = 0; i < fields_count; ++i)
@@ -223,7 +236,11 @@ int main(int argc, char** argv)
         auto name_index = r16();
         auto descriptor_index = r16();
         auto attributes_count = r16();
-        assert(attributes_count == 0);
+
+        if (attributes_count != 0)
+        {
+            throw fmt::format("Attributes on fields not handled.");
+        }
 
         if ((access_flags & 0x0008) > 0)
         {
@@ -275,7 +292,7 @@ int main(int argc, char** argv)
                 }
                 else
                 {
-                    assert(false);
+                    throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
                 }
             }
         }
@@ -307,7 +324,10 @@ int main(int argc, char** argv)
 
                     // value: element_value
                     auto tag = r8();
-                    assert(tag == 'e');
+                    if (tag != 'e')
+                    {
+                        throw fmt::format("Annotation '@Board' must contains an enumeration.");
+                    }
 
                     if (type_name == "Lpico/board;" && element_name == "value")
                     {
@@ -322,7 +342,7 @@ int main(int argc, char** argv)
                         }
                         else
                         {
-                            assert(false);
+                            throw fmt::format("Annotation '@Board' must contains a BoardType value.");
                         }
 
                         iii = num_element_value_pairs;
@@ -358,7 +378,10 @@ int main(int argc, char** argv)
                     if (std::holds_alternative<MethodHandle>(bootstrap_pool))
                     {
                         auto handle = std::get<MethodHandle>(bootstrap_pool);
-                        assert(handle.reference_kind == REF_invokeStatic);
+                        if (handle.reference_kind != REF_invokeStatic)
+                        {
+                            throw fmt::format("Only static references are valid as a bootstrap method handle parameter.");
+                        }
 
                         auto method = std::get<Methodref>(constantPool[handle.reference_index]);
                         auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
@@ -390,7 +413,7 @@ int main(int argc, char** argv)
                     }
                     else
                     {
-                        assert(false);
+                        throw fmt::format("Unhandled parameter type for bootstrap method '{}' at index '{}'", bootstrap_methodName, arg);
                     }
                 }
 
@@ -404,7 +427,7 @@ int main(int argc, char** argv)
                 }
                 else
                 {
-                    assert(false);
+                    throw fmt::format("Unhandled bootstrap method: '{}'.", bootstrap_methodName);
                 }
             }
         }
@@ -413,7 +436,7 @@ int main(int argc, char** argv)
         }
         else
         {
-            assert(false);
+            throw fmt::format("Unhandled class attribute: '{}'.", attribute_name);
         }
     }
 
@@ -466,7 +489,7 @@ int main(int argc, char** argv)
             }
             else
             {
-                assert(false);
+                throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
             }
         }
 
@@ -549,8 +572,7 @@ std::string getTypeFromDescriptor(std::string descriptor)
         return "int";
     }
 
-    assert(false);
-    return {};
+    throw fmt::format("Invalid type used as a static field: '{}'.", descriptor);
 }
 
 std::string getReturnType(std::string descriptor)
@@ -573,7 +595,7 @@ std::string getReturnType(std::string descriptor)
         return "int";
     }
 
-    assert(false);
+    throw fmt::format("Invalid or unhandled type used as a return type: '{}'.", type);
 }
 
 Board getBoardTypeFromString(std::string board_name)
@@ -586,5 +608,5 @@ Board getBoardTypeFromString(std::string board_name)
     if (board_name == "tiny2040_2mb") return Board::Tiny2040_2mb;
     if (board_name == "badger2040")   return Board::Badger2040;
 
-    assert(false);
+    throw fmt::format("Invalid board: '{}'.", board_name);
 }

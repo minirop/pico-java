@@ -15,7 +15,6 @@
 #include <filesystem>
 #include <set>
 #include <utility>
-#include <cassert>
 #include <boost/algorithm/string/replace.hpp>
 
 using u1 = uint8_t;

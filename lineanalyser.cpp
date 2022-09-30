@@ -3,7 +3,6 @@
 #include <endian.h>
 #include <optional>
 #include <type_traits>
-#include <cassert>
 
 using namespace std::string_literals;
 
@@ -36,7 +35,7 @@ std::string getType(int type)
     case T_LONG:    return "long";
     }
 
-    assert(false);
+    throw fmt::format("Invalid type: '{}'.", type);
 }
 
 std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position);
@@ -79,17 +78,17 @@ u2 getLineFromOpcode(u2 opcode)
     return std::get<1>(lineNumbers[lineNumbers.size() - 1]);
 }
 
-u2 getOpcodeFromLine(u2 opcode)
+u2 getOpcodeFromLine(u2 line)
 {
     for (auto & l : *lines)
     {
-        if (std::get<1>(l) == opcode)
+        if (std::get<1>(l) == line)
         {
             return std::get<0>(l);
         }
     }
 
-    assert(false);
+    throw fmt::format("Invalid line given.");
 }
 
 std::multiset<u4> closingBrackets, elseStmts;
@@ -130,7 +129,10 @@ std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name,
                     );
     }
 
-    assert(closingBrackets.size() == 0);
+    if (closingBrackets.size() != 0)
+    {
+        throw fmt::format("Mismatched brackets.");
+    }
 
     return insts;
 }
@@ -245,7 +247,10 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
 
 std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position)
 {
-    assert(sizeof(int) != sizeof(long));
+    if (sizeof(int) == sizeof(long))
+    {
+        throw fmt::format("'int' and 'long' are the same size.");
+    }
 
     auto buffer_size = buffer.size();
     auto start_pc = getOpcodeFromLine(position);
@@ -282,7 +287,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             }
             else
             {
-                assert(false);
+                throw fmt::format("Only String is handled as an array type.");
             }
 
             Array arr;
@@ -319,7 +324,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 }
                 else
                 {
-                    assert(false);
+                    throw fmt::format("Reusing local variable of type array. Not handled because it will break.");
                 }
             }
             else if (std::holds_alternative<std::string>(v))
@@ -487,13 +492,16 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         {
             auto id = r16();
             auto zero = r16();
-            assert(zero == 0);
+            if (zero != 0)
+            {
+                throw fmt::format("zero is not '0' but '{}'.", zero);
+            }
 
             auto invokeDyn = std::get<InvokeDynamic>(constantPool[id]);
             auto tpl = callbacksMethods[invokeDyn.bootstrap_method_attr_index];
             if (tpl.contains(0x02))
             {
-                assert(false);
+                throw fmt::format("Unhandled 0x02 template.");
             }
             if (tpl.contains(0x01))
             {
@@ -674,7 +682,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             break;
         }
         default:
-            assert(false);
+            throw fmt::format("Unhandled opcode: '{:x}'.", opcode);
         }
     }
 
@@ -781,17 +789,18 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         }
         else
         {
+            std::string group;
             for (auto & op : operations)
             {
-                fmt::print("{}\n", static_cast<int>(op.type));
+                group += fmt::format("{} ", static_cast<int>(op.type));
             }
-            assert(false);
+            throw fmt::format("Unhandled group of 4 operations: {}.", group);
         }
         break;
     }
     default:
     {
-        assert(false);
+        throw fmt::format("Operation matcher does not handle groups of {} operation.", operations.size());
     }
     }
 
@@ -922,7 +931,7 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
             }
             else
             {
-                assert(false);
+                throw fmt::format("A condition operation wants to jump backwards.");
             }
         }
         else
@@ -963,14 +972,17 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
                 }
             }
 
-            assert(abs_line > curr_line);
+            if (abs_line <= curr_line)
+            {
+                throw fmt::format("A jump operation didn't found its target.");
+            }
 
             elseStmts.insert(curr_line + 1);
             closingBrackets.insert(abs_line);
         }
         else
         {
-            assert(false);
+            throw fmt::format("jump operations backwards are not handled.");
         }
         break;
     }
@@ -980,7 +992,7 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
         break;
     }
     default:
-        assert(false);
+        throw fmt::format("Invalid operation: '{}'.", std::to_underlying(operation.type));
     }
 
     return output;
