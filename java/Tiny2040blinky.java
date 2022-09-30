@@ -1,11 +1,12 @@
 import pico.*;
+import pimoroni.*;
 
 @board(BoardType.Tiny2040)
 class Tiny2040blinky
 {
-	static int RED_LED = 18;
-	static int GREEN_LED = 19;
-	static int BLUE_LED = 20;
+	static int RED_LED = tiny2040.LED_R_PIN;
+	static int GREEN_LED = tiny2040.LED_G_PIN;
+	static int BLUE_LED = tiny2040.LED_B_PIN;
 	static int IRQ_PIN = 23;
 	static int counter = 0;
 

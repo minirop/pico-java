@@ -251,8 +251,8 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
     auto start_pc = getOpcodeFromLine(position);
 
     std::vector<Operation> operations;
-    std::vector<Instruction> insts = { Instruction() };
-    Instruction & inst = insts.front();
+    std::vector<Instruction> lineInsts = { Instruction() };
+    Instruction & inst = lineInsts.front();
     inst.position = position;
 
     while (buffer.size())
@@ -608,7 +608,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 }
             }
 
-            auto callString = fmt::format("{}({})", fullName, argsString);
+            auto callString = fmt::format("{}({});", fullName, argsString);
             auto retType = getReturnType(descriptor);
             if (retType.size() && retType != "void")
             {
@@ -621,6 +621,56 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 op.call.code = callString;
                 operations.push_back(op);
             }
+            break;
+        }
+        case getstatic:
+        {
+            auto id = r16();
+            auto method = std::get<Fieldref>(constantPool[id]);
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
+            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
+            auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+
+            auto fullName = fmt::format("{}::{}", className, variableName);
+            boost::replace_all(fullName, "/"s, "::"s);
+
+            stack.push_back(fullName);
+            break;
+        }
+        case sipush:
+        {
+            auto value = r16();
+            stack.push_back(value);
+            break;
+        }
+        case irem:
+        {
+            auto right = stack.back();
+            stack.pop_back();
+            auto left = stack.back();
+            stack.pop_back();
+
+            stack.push_back(fmt::format("({} % {})", getAsString(left), getAsString(right)));
+            break;
+        }
+        case putstatic:
+        {
+            auto id = r16();
+            auto method = std::get<Fieldref>(constantPool[id]);
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
+            auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
+
+            auto fullName = fmt::format("{}::{}", className, variableName);
+            boost::replace_all(fullName, "/"s, "::"s);
+
+            auto val = stack.back();
+            stack.pop_back();
+
+            Operation op;
+            op.type = OpType::Call;
+            op.call.code = fmt::format("{} = {};", fullName, getAsString(val));
+            operations.push_back(op);
             break;
         }
         default:
@@ -650,16 +700,48 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             {
                 Instruction tmp;
                 tmp.opcode = generateCodeFromOperation(o1, start_pc, addOpeningParen);
-                insts.push_back(tmp);
+                lineInsts.push_back(tmp);
             }
             else
             {
-                assert(false);
+                auto jumpLine = getLineFromOpcode(o2.jump.absolute);
+                bool append = true;
+                for (size_t idx = 0; idx < insts.size(); ++idx)
+                {
+                    if (jumpLine <= insts[idx].position)
+                    {
+                        Instruction tmp;
+                        tmp.opcode = "while (true)";
+                        insts.insert(insts.begin() + idx, tmp);
+                        tmp.opcode = "{";
+                        insts.insert(insts.begin() + idx + 1, tmp);
+                        append = false;
+                        break;
+                    }
+                }
+
+                if (append)
+                {
+                    Instruction tmp;
+                    tmp.opcode = "while (true)";
+                    insts.push_back(tmp);
+                    tmp.opcode = "{";
+                    insts.push_back(tmp);
+                }
+
+                Instruction tmp;
+                tmp.opcode = "}";
+                lineInsts.push_back(tmp);
             }
         }
         else
         {
-            assert(false);
+            auto op = operations[0];
+            inst.opcode = generateCodeFromOperation(op, start_pc, addOpeningParen);
+
+            Instruction tmp;
+            tmp.opcode = generateCodeFromOperation(operations[1], start_pc, addOpeningParen);
+            lineInsts.push_back(tmp);
         }
         break;
     }
@@ -719,9 +801,9 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         {
             Instruction elseStmt;
             elseStmt.opcode = "{";
-            insts.insert(begin(insts), elseStmt);
+            lineInsts.insert(begin(lineInsts), elseStmt);
             elseStmt.opcode = "else";
-            insts.insert(begin(insts), elseStmt);
+            lineInsts.insert(begin(lineInsts), elseStmt);
 
             it = elseStmts.erase(it);
 
@@ -741,7 +823,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         {
             Instruction closingBracket;
             closingBracket.opcode = "}";
-            insts.insert(begin(insts), closingBracket);
+            lineInsts.insert(begin(lineInsts), closingBracket);
             it = closingBrackets.erase(it);
 
             localsTypes.pop_back();
@@ -756,10 +838,10 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
     {
         Instruction openingBracket;
         openingBracket.opcode = "{";
-        insts.push_back(openingBracket);
+        lineInsts.push_back(openingBracket);
     }
 
-    return insts;
+    return lineInsts;
 }
 
 std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & addOpeningParen)

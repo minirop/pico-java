@@ -16,7 +16,7 @@ void build_pico(std::string project_name, Board board)
     if (!getenv("PICO_SDK_PATH"))
     {
         fmt::print("$PICO_SDK_PATH is not set nor accessible. Aborting.\n");
-        //return;
+        return;
     }
 
     if (board == Board::Badger2040)
@@ -24,7 +24,7 @@ void build_pico(std::string project_name, Board board)
         if (!getenv("PIMORONI_PICO_PATH"))
         {
             fmt::print("$PIMORONI_PICO_PATH is not set nor accessible. Aborting.\n");
-            //return;
+            return;
         }
     }
 
@@ -39,12 +39,11 @@ void build_pico(std::string project_name, Board board)
 
     std::ofstream output_c("main.cpp");
 
-    output_c << "#include \"pico-java.h\"\n"
-                  "\n";
+    output_c << "#include \"pico-java.h\"\n";
 
     if (fields.size() || functions.size() > 1)
     {
-        output_c << "namespace " << project_name << "\n{\n";
+        output_c << "\n" << "namespace " << project_name << "\n{\n";
         for (auto & field : fields)
         {
             output_c << '\t' << field.type << " " << field.name << ";\n";
@@ -56,7 +55,7 @@ void build_pico(std::string project_name, Board board)
                 output_c << '\t' << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
             }
         }
-        output_c << "}\n\n";
+        output_c << "}\n";
     }
 
     bool has_static_init = false;
@@ -72,6 +71,7 @@ void build_pico(std::string project_name, Board board)
     {
         bool isMain = func.name == "main";
 
+        output_c << "\n";
         if (!isMain)
         {
             output_c << "namespace " << project_name << " {\n";
@@ -104,8 +104,6 @@ void build_pico(std::string project_name, Board board)
         {
             output_c << "}\n";
         }
-
-        output_c << '\n';
     }
 
     output_c.close();
@@ -157,10 +155,10 @@ namespace pico
 
     namespace gpio
     {
-        static inline int INPUT = GPIO_IN;
-        static inline int OUTPUT = GPIO_OUT;
-        static inline int IRQ_EDGE_RISE = GPIO_IRQ_EDGE_RISE;
-        static inline int IRQ_EDGE_FALL = GPIO_IRQ_EDGE_FALL;
+        static inline auto INPUT = GPIO_IN;
+        static inline auto OUTPUT = GPIO_OUT;
+        static inline auto IRQ_EDGE_RISE = GPIO_IRQ_EDGE_RISE;
+        static inline auto IRQ_EDGE_FALL = GPIO_IRQ_EDGE_FALL;
 
         inline void init(int pin)
         {
@@ -316,10 +314,22 @@ namespace pimoroni
 }
 )___";
     }
+    else if (board == Board::Tiny2040 || board == Board::Tiny2040_2mb)
+    {
+        output_header << R"___(
+namespace pimoroni
+{
+    namespace tiny2040
+    {
+        static inline auto LED_R_PIN = TINY2040_LED_R_PIN;
+        static inline auto LED_G_PIN = TINY2040_LED_G_PIN;
+        static inline auto LED_B_PIN = TINY2040_LED_B_PIN;
+    }
+})___";
+    }
 
     output_header.close();
 
-    return;
     fs::current_path(tempPath / tempDir / "build");
     system("cmake ..");
     system("make");
@@ -356,7 +366,7 @@ std::string generateParameters(std::string descriptor)
             break;
         case 'I':
         case 'Z':
-            ret += fmt::format(", int ilocal_{}", count);
+            ret += fmt::format(", int local_{}", count);
             ++count;
             break;
         default:

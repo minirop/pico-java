@@ -195,8 +195,8 @@ int main(int argc, char** argv)
         }
         case CONSTANT_MethodType:
         {
-            r16();
-            constantPool.push_back({});
+            MethodType info { r16() };
+            constantPool.push_back(info);
             break;
         }
         case CONSTANT_InvokeDynamic:
@@ -365,13 +365,15 @@ int main(int argc, char** argv)
                         auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
                         auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
 
+                        auto fullName = fmt::format("{}::{}", className, methodName);
+
                         std::string caster;
-                        if (descriptor == "(II)V")
+                        if (fullName == "ButtonBlinky::gpio_irq_callback")
                         {
                             caster = "(gpio_irq_callback_t)";
                         }
 
-                        auto fullName = fmt::format("{}{}::{}", caster, className, methodName);
+                        fullName = fmt::format("{}{}", caster, fullName);
                         boost::replace_all(fullName, "/"s, "::"s);
 
                         args.push_back(fullName);
@@ -382,18 +384,27 @@ int main(int argc, char** argv)
                         auto str = getStringFromUtf8(data.string_index);
                         args.push_back(str);
                     }
+                    else if (std::holds_alternative<MethodType>(bootstrap_pool))
+                    {
+                        args.push_back("");
+                    }
                     else
                     {
                         assert(false);
-                    }
-                    {
-
                     }
                 }
 
                 if (bootstrap_methodName == "makeConcatWithConstants")
                 {
                     callbacksMethods.push_back(args[0]);
+                }
+                else if (bootstrap_methodName == "metafactory")
+                {
+                    callbacksMethods.push_back(args[1]);
+                }
+                else
+                {
+                    assert(false);
                 }
             }
         }

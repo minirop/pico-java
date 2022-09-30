@@ -200,6 +200,11 @@ struct MethodHandle
     u2 reference_index;
 };
 
+struct MethodType
+{
+    u2 descriptor_index;
+};
+
 struct Class
 {
     u2 name_index;
@@ -243,7 +248,8 @@ struct method_info
     std::vector<attribute_info> attributes;
 };
 
-using Constant = std::variant<Fieldref
+using Constant = std::variant<std::monostate
+                            , Fieldref
                             , Methodref
                             , InterfaceMethodref
                             , Class
@@ -251,6 +257,7 @@ using Constant = std::variant<Fieldref
                             , Utf8
                             , InvokeDynamic
                             , MethodHandle
+                            , MethodType
                             , String
                             , Float>;
 using ConstantPool = std::vector<Constant>;
