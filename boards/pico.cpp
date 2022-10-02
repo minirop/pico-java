@@ -16,7 +16,7 @@ void build_pico(std::string project_name, Board board)
     if (!getenv("PICO_SDK_PATH"))
     {
         fmt::print("$PICO_SDK_PATH is not set nor accessible. Aborting.\n");
-        return;
+        //return;
     }
 
     if (board == Board::Badger2040)
@@ -24,7 +24,7 @@ void build_pico(std::string project_name, Board board)
         if (!getenv("PIMORONI_PICO_PATH"))
         {
             fmt::print("$PIMORONI_PICO_PATH is not set nor accessible. Aborting.\n");
-            return;
+            //return;
         }
     }
 
@@ -330,6 +330,7 @@ namespace pimoroni
 
     output_header.close();
 
+    return;
     fs::current_path(tempPath / tempDir / "build");
     system("cmake ..");
     system("make");

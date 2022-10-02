@@ -72,6 +72,7 @@ enum
     aload_3 = 0x2d,
     iaload = 0x2e,
     istore = 0x36,
+    astore = 0x3a,
     istore_0 = 0x3b,
     istore_1 = 0x3c,
     istore_2 = 0x3d,

@@ -141,6 +141,7 @@ struct Array
 {
     size_t size;
     std::string type;
+    size_t position;
 };
 
 using Value = std::variant<int, long, float, double, std::string, Array>;
@@ -202,6 +203,8 @@ struct Operation
     {
         std::optional<std::string> type;
         std::optional<int> size;
+        u4 position;
+        std::string arr_type;
         int index;
         std::optional<std::string> value;
     } store;
@@ -293,15 +296,26 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             Array arr;
             arr.size = size;
             arr.type = cppType;
+            arr.position = start_pc + buffer_size - buffer.size() - 1;
             stack.push_back(arr);
             break;
         }
+        case astore:
         case astore_0:
         case astore_1:
         case astore_2:
         case astore_3:
         {
-            int index = opcode - astore_0;
+            int index;
+            if (opcode == astore)
+            {
+                index = r8();
+            }
+            else
+            {
+                index = opcode - astore_0;
+            }
+
             auto v = stack.back();
             stack.pop_back();
             auto & locals = localsTypes.back();
@@ -316,23 +330,26 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 auto arr = std::get<Array>(v);
 
                 op.store.size = arr.size;
-                op.store.type = arr.type;
+                op.store.position = arr.position;
+                op.store.arr_type = arr.type;
 
                 if (localType != T_ARRAY)
                 {
+                    op.store.type = arr.type;
                     locals[index] = T_ARRAY;
                 }
                 else
                 {
-                    throw fmt::format("Reusing local variable of type array. Not handled because it will break.");
+                    //throw fmt::format("Reusing local variable of type array. Not handled because it will break.");
                 }
             }
             else if (std::holds_alternative<std::string>(v))
             {
                 auto str = std::get<std::string>(v);
+                op.store.arr_type = "std::string";
                 if (localType != T_STRING)
                 {
-                    op.store.type = "std::string";
+                    op.store.type =  op.store.arr_type;
                     locals[index] = T_STRING;
                 }
             }
@@ -681,6 +698,20 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             operations.push_back(op);
             break;
         }
+        case newarray:
+        {
+            auto val = stack.back();
+            stack.pop_back();
+            auto size = std::get<int>(val);
+            auto type = r8();
+
+            Array arr;
+            arr.size = size;
+            arr.type = getType(type);
+            arr.position = start_pc + buffer_size - buffer.size() - 1;
+            stack.push_back(arr);
+            break;
+        }
         default:
             throw fmt::format("Unhandled opcode: '{:x}'.", opcode);
         }
@@ -863,19 +894,38 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
     {
         auto s = operation.store;
         std::string tmp;
-        if (s.type.has_value())
+
+        // if not an array print the optional type
+        if (s.type.has_value() && !s.size.has_value())
         {
             tmp += s.type.value();
             tmp += " ";
         }
-        tmp += fmt::format("local_{}", s.index);
+
+        // array
         if (s.size.has_value())
         {
-            tmp += fmt::format("[{}]", s.size.value());
+            tmp += fmt::format("{} temp_{:x}[{}]", s.arr_type, s.position, s.size.value());
         }
-        else if (s.value.has_value())
+        else
         {
-            tmp += fmt::format(" = {}", s.value.value());
+            // variable
+            tmp += fmt::format("local_{}", s.index);
+            if (s.value.has_value())
+            {
+                tmp += fmt::format(" = {}", s.value.value());
+            }
+        }
+
+        // initialise local from array
+        if (s.size.has_value())
+        {
+            std::string type = "";
+            if (s.type.has_value())
+            {
+                type = s.type.value() + "* ";
+            }
+            tmp += fmt::format("; {}local_{} = temp_{:x}", type, s.index, s.position);
         }
 
         output = tmp + ";";
