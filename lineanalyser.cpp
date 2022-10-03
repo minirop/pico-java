@@ -142,6 +142,7 @@ struct Array
     size_t size;
     std::string type;
     size_t position;
+    std::vector<std::string> populate;
 };
 
 using Value = std::variant<int, long, float, double, std::string, Array>;
@@ -207,6 +208,7 @@ struct Operation
         std::string arr_type;
         int index;
         std::optional<std::string> value;
+        std::vector<std::string> populate;
     } store;
 
     struct
@@ -332,6 +334,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 op.store.size = arr.size;
                 op.store.position = arr.position;
                 op.store.arr_type = arr.type;
+                op.store.populate = arr.populate;
 
                 if (localType != T_ARRAY)
                 {
@@ -342,6 +345,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             else if (std::holds_alternative<std::string>(v))
             {
                 auto str = std::get<std::string>(v);
+                assert(false);
                 op.store.arr_type = "std::string";
                 if (localType != T_STRING)
                 {
@@ -466,7 +470,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         case aload_3:
         {
             int index;
-            if (opcode == iload)
+            if (opcode == aload)
             {
                 index = r8();
             }
@@ -610,13 +614,25 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto arr = stack.back();
             stack.pop_back();
 
-            Operation op;
-            op.type = OpType::IndexedStore;
-            op.istore.index = getAsString(index);
-            op.istore.array = getAsString(arr);
-            op.istore.value = getAsString(value);
-
-            operations.push_back(op);
+            if (std::holds_alternative<std::string>(arr))
+            {
+                Operation op;
+                op.type = OpType::IndexedStore;
+                op.istore.index = getAsString(index);
+                op.istore.array = getAsString(arr);
+                op.istore.value = getAsString(value);
+                operations.push_back(op);
+            }
+            else if (std::holds_alternative<Array>(arr))
+            {
+                auto orig = stack.back();
+                std::get<Array>(orig).populate.push_back(getAsString(value));
+                stack.push_back(orig);
+            }
+            else
+            {
+                throw fmt::format("Unhandled type (id: {}). Expecting 'Array' or 'string'.", value.index());
+            }
             break;
         }
         case return_:
@@ -1024,6 +1040,11 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
         // initialise local from array
         if (s.size.has_value())
         {
+            for (size_t p = 0; p < s.populate.size(); ++p)
+            {
+                tmp += fmt::format("; temp_{:x}[{}] = {}", s.position, p, s.populate[p]);
+            }
+
             std::string type = "";
             if (s.type.has_value())
             {
