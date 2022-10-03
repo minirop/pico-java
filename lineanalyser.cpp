@@ -338,10 +338,6 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                     op.store.type = arr.type;
                     locals[index] = T_ARRAY;
                 }
-                else
-                {
-                    //throw fmt::format("Reusing local variable of type array. Not handled because it will break.");
-                }
             }
             else if (std::holds_alternative<std::string>(v))
             {
@@ -431,7 +427,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         case aload_3:
         {
             int index = opcode - aload_0;
-            stack.push_back(fmt::format("alocal_{}", index));
+            stack.push_back(fmt::format("local_{}", index));
             break;
         }
         case arraylength:
@@ -712,6 +708,23 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             stack.push_back(arr);
             break;
         }
+        case ldc:
+        {
+            auto index = r8();
+            auto constant = constantPool[index];
+
+            if (std::holds_alternative<String>(constant))
+            {
+                auto data = std::get<String>(constant);
+                auto str = getStringFromUtf8(data.string_index);
+                stack.push_back(fmt::format("\"{}\"", str));
+            }
+            else
+            {
+                assert(false);
+            }
+            break;
+        }
         default:
             throw fmt::format("Unhandled opcode: '{:x}'.", opcode);
         }
@@ -738,7 +751,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             if (o2.jump.absolute > start_pc)
             {
                 Instruction tmp;
-                tmp.opcode = generateCodeFromOperation(o1, start_pc, addOpeningParen);
+                tmp.opcode = generateCodeFromOperation(o2, start_pc, addOpeningParen); //???
                 lineInsts.push_back(tmp);
             }
             else
@@ -775,8 +788,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         }
         else
         {
-            auto op = operations[0];
-            inst.opcode = generateCodeFromOperation(op, start_pc, addOpeningParen);
+            inst.opcode = generateCodeFromOperation(operations[0], start_pc, addOpeningParen);
 
             Instruction tmp;
             tmp.opcode = generateCodeFromOperation(operations[1], start_pc, addOpeningParen);
@@ -820,12 +832,15 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         }
         else
         {
-            std::string group;
-            for (auto & op : operations)
+            inst.opcode = generateCodeFromOperation(operations[0], start_pc, addOpeningParen);
+
+            for (size_t i = 1; i < operations.size(); ++i)
             {
-                group += fmt::format("{} ", static_cast<int>(op.type));
+                Instruction tmp;
+                tmp.opcode = generateCodeFromOperation(operations[i], start_pc, addOpeningParen);
+                tmp.position = position;
+                lineInsts.push_back(tmp);
             }
-            throw fmt::format("Unhandled group of 4 operations: {}.", group);
         }
         break;
     }
