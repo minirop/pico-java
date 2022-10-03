@@ -20,9 +20,11 @@
 using u1 = uint8_t;
 using u2 = uint16_t;
 using u4 = uint32_t;
+using u8 = uint64_t;
 using s1 = int8_t;
 using s2 = int16_t;
 using s4 = int32_t;
+using s8 = int64_t;
 
 struct Instruction
 {
@@ -61,7 +63,10 @@ enum
     bipush = 0x10,
     sipush = 0x11,
     ldc = 0x12,
+    ldc_w = 0x13,
+    ldc2_w = 0x14,
     iload = 0x15,
+    aload = 0x19,
     iload_0 = 0x1a,
     iload_1 = 0x1b,
     iload_2 = 0x1c,
@@ -72,16 +77,33 @@ enum
     aload_3 = 0x2d,
     iaload = 0x2e,
     istore = 0x36,
+    lstore = 0x37,
+    fstore = 0x38,
+    dstore = 0x39,
     astore = 0x3a,
     istore_0 = 0x3b,
     istore_1 = 0x3c,
     istore_2 = 0x3d,
     istore_3 = 0x3e,
+    lstore_0 = 0x40,
+    lstore_1 = 0x41,
+    lstore_2 = 0x42,
+    fstore_0 = 0x43,
+    fstore_1 = 0x44,
+    fstore_2 = 0x45,
+    fstore_3 = 0x46,
+    dstore_0 = 0x47,
+    dstore_1 = 0x48,
+    dstore_2 = 0x49,
+    dstore_3 = 0x4a,
     astore_0 = 0x4b,
     astore_1 = 0x4c,
     astore_2 = 0x4d,
     astore_3 = 0x4e,
     iastore = 0x4f,
+    lastore = 0x50,
+    fastore = 0x51,
+    dastore = 0x52,
     aastore = 0x53,
     pop = 0x57,
     dup_ = 0x59,
@@ -215,11 +237,6 @@ struct String
     u2 string_index;
 };
 
-struct Float
-{
-    u4 bytes;
-};
-
 struct NameAndType
 {
     u2 name_index;
@@ -259,7 +276,10 @@ using Constant = std::variant<std::monostate
                             , MethodHandle
                             , MethodType
                             , String
-                            , Float>;
+                            , float
+                            , double
+                            , s4
+                            , s8>;
 using ConstantPool = std::vector<Constant>;
 extern ConstantPool constantPool;
 extern std::vector<std::string> callbacksMethods;

@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "lineanalyser.h"
 #include "boards/pico.h"
+#include <bit>
 
 using namespace std::string_literals;
 
@@ -147,20 +148,39 @@ int main(int argc, char** argv)
             break;
         }
         case CONSTANT_Integer:
-            throw fmt::format("integer constants are not handled.");
+        {
+            auto v = s32();
+            constantPool.push_back(v);
             break;
+        }
         case CONSTANT_Float:
         {
-            Float info { r32() };
+            auto v = r32();
+            auto info = std::bit_cast<float>(v);
             constantPool.push_back(info);
             break;
         }
         case CONSTANT_Long:
-            throw fmt::format("long constants are not handled.");
+        {
+            auto h = r32();
+            auto l = r32();
+            s8 info = (s8{h} << 32) | l;
+            constantPool.push_back(info);
+            ++i;
+            constantPool.push_back({});
             break;
+        }
         case CONSTANT_Double:
-            throw fmt::format("double constants are not handled.");
+        {
+            auto h = r32();
+            auto l = r32();
+            u8 v = (s8{h} << 32) | l;
+            auto info = std::bit_cast<double>(v);
+            constantPool.push_back(info);
+            ++i;
+            constantPool.push_back({});
             break;
+        }
         case CONSTANT_Class:
         {
             Class info { r16() };

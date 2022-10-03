@@ -159,11 +159,11 @@ std::string getAsString(const Value & value)
         }
         else if constexpr (std::is_same_v<T, long>)
         {
-            return fmt::format("{}", arg);
+            return fmt::format("{}L", arg);
         }
         else if constexpr (std::is_same_v<T, float>)
         {
-            return fmt::format("{}", arg);
+            return fmt::format("{}f", arg);
         }
         else if constexpr (std::is_same_v<T, double>)
         {
@@ -371,22 +371,56 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             break;
         }
         case istore:
+        case lstore:
+        case fstore:
+        case dstore:
         case istore_0:
         case istore_1:
         case istore_2:
         case istore_3:
         {
+            int unnumbered;
+            int zero_numbered;
+            int this_type;
+            switch (opcode)
+            {
+            case istore:
+            case istore_0:
+            case istore_1:
+            case istore_2:
+            case istore_3:
+                unnumbered = istore;
+                zero_numbered = istore_0;
+                this_type = T_INT;
+                break;
+            case lstore:
+                unnumbered = lstore;
+                zero_numbered = lstore_0;
+                this_type = T_LONG;
+                break;
+            case fstore:
+                unnumbered = fstore;
+                zero_numbered = fstore_0;
+                this_type = T_FLOAT;
+                break;
+            case dstore:
+                unnumbered = dstore;
+                zero_numbered = dstore_0;
+                this_type = T_DOUBLE;
+                break;
+            }
+
             auto v = stack.back();
             stack.pop_back();
 
             int index;
-            if (opcode == istore)
+            if (opcode == unnumbered)
             {
                 index = r8();
             }
             else
             {
-                index = opcode - istore_0;
+                index = opcode - zero_numbered;
             }
 
             Operation op;
@@ -395,10 +429,10 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
 
             auto & locals = localsTypes.back();
             auto localType = findLocal(index);
-            if (localType != T_INT)
+            if (localType != this_type)
             {
-                op.store.type = getType(T_INT);
-                locals[index] = T_INT;
+                op.store.type = getType(this_type);
+                locals[index] = this_type;
             }
 
             op.store.value = getAsString(v);
@@ -407,26 +441,40 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             break;
         }
         case iload:
-        {
-            auto index = r8();
-            stack.push_back(fmt::format("local_{}", index));
-            break;
-        }
         case iload_0:
         case iload_1:
         case iload_2:
         case iload_3:
         {
-            int index = opcode - iload_0;
+            int index;
+            if (opcode == iload)
+            {
+                index = r8();
+            }
+            else
+            {
+                index = opcode - iload_0;
+            }
+
             stack.push_back(fmt::format("local_{}", index));
             break;
         }
+        case aload:
         case aload_0:
         case aload_1:
         case aload_2:
         case aload_3:
         {
-            int index = opcode - aload_0;
+            int index;
+            if (opcode == iload)
+            {
+                index = r8();
+            }
+            else
+            {
+                index = opcode - aload_0;
+            }
+
             stack.push_back(fmt::format("local_{}", index));
             break;
         }
@@ -434,7 +482,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         {
             auto val = stack.back();
             stack.pop_back();
-            stack.push_back(fmt::format("{}.length()", std::get<std::string>(val)));
+            stack.push_back(fmt::format("{}.size()", std::get<std::string>(val)));
             break;
         }
         case if_icmpeq:
@@ -551,6 +599,9 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         }
         case iastore:
         case aastore:
+        case fastore:
+        case lastore:
+        case dastore:
         {
             auto value = stack.back();
             stack.pop_back();
@@ -709,8 +760,20 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             break;
         }
         case ldc:
+        case ldc_w:
+        case ldc2_w:
         {
-            auto index = r8();
+            int index = 0;
+
+            if (opcode == ldc)
+            {
+                index = r8();
+            }
+            else
+            {
+                index = r16();
+            }
+
             auto constant = constantPool[index];
 
             if (std::holds_alternative<String>(constant))
@@ -719,10 +782,36 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 auto str = getStringFromUtf8(data.string_index);
                 stack.push_back(fmt::format("\"{}\"", str));
             }
+            else if (std::holds_alternative<float>(constant))
+            {
+                auto f = std::get<float>(constant);
+                stack.push_back(fmt::format("{}f", f));
+            }
+            else if (std::holds_alternative<double>(constant))
+            {
+                auto d = std::get<double>(constant);
+                stack.push_back(fmt::format("{}", d));
+            }
+            else if (std::holds_alternative<s4>(constant))
+            {
+                auto s = std::get<s4>(constant);
+                stack.push_back(fmt::format("{}", s));
+            }
+            else if (std::holds_alternative<s8>(constant))
+            {
+                auto s = std::get<s8>(constant);
+                stack.push_back(fmt::format("{}L", s));
+            }
             else
             {
                 assert(false);
             }
+            break;
+        }
+        case dup_:
+        {
+            auto val = stack.back();
+            stack.push_back(val);
             break;
         }
         default:
