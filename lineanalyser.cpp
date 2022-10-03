@@ -647,6 +647,9 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             break;
         }
         case imul:
+        case lmul:
+        case fmul_:
+        case dmul:
         {
             auto right = stack.back();
             stack.pop_back();
@@ -820,7 +823,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             }
             else
             {
-                assert(false);
+                throw fmt::format("Trying to load unhandled type. Accepted types: 'int', 'long', 'float', 'double' or 'string'.");
             }
             break;
         }
@@ -828,6 +831,35 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         {
             auto val = stack.back();
             stack.push_back(val);
+            break;
+        }
+        case laload:
+        case faload:
+        case daload:
+        case aaload:
+        case baload:
+        case caload:
+        case saload:
+        {
+            auto index = stack.back();
+            stack.pop_back();
+            auto arr = stack.back();
+            stack.pop_back();
+            stack.push_back(fmt::format("{}[{}]", getAsString(arr), getAsString(index)));
+            break;
+        }
+        case l2f:
+        {
+            auto value = stack.back();
+            stack.pop_back();
+            stack.push_back(fmt::format("static_cast<float>({})", getAsString(value)));
+            break;
+        }
+        case f2d:
+        {
+            auto value = stack.back();
+            stack.pop_back();
+            stack.push_back(fmt::format("static_cast<double>({})", getAsString(value)));
             break;
         }
         default:
