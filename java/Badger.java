@@ -1,7 +1,8 @@
+import board.*;
 import pico.*;
 import pimoroni.*;
 
-@board(BoardType.Badger2040)
+@Board(Type.Badger2040)
 class Badger
 {
 	public static void main(String[] args)

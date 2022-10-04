@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "lineanalyser.h"
 #include "boards/pico.h"
+#include "boards/gamebuino.h"
 #include <bit>
 
 using namespace std::string_literals;
@@ -349,20 +350,20 @@ int main(int argc, char** argv)
                         throw fmt::format("Annotation '@Board' must contains an enumeration.");
                     }
 
-                    if (type_name == "Lpico/board;" && element_name == "value")
+                    if (type_name == "Lboard/Board;" && element_name == "value")
                     {
                         auto type_name_index = r16();
                         auto type_name = getStringFromUtf8(type_name_index);
                         auto const_name_index = r16();
                         auto const_name = getStringFromUtf8(const_name_index);
 
-                        if (type_name == "Lpico/BoardType;")
+                        if (type_name == "Lboard/Type;")
                         {
                             board_name = const_name;
                         }
                         else
                         {
-                            throw fmt::format("Annotation '@Board' must contains a BoardType value.");
+                            throw fmt::format("Annotation '@Board' must contains a board.Type value.");
                         }
 
                         iii = num_element_value_pairs;
@@ -526,7 +527,15 @@ int main(int argc, char** argv)
         functions.push_back(funData);
     }
 
-    build_pico(project_name, getBoardTypeFromString(board_name));
+    auto board = getBoardTypeFromString(board_name);
+    if (board == Board::Gamebuino)
+    {
+        build_gamebuino(project_name);
+    }
+    else
+    {
+        build_pico(project_name, getBoardTypeFromString(board_name));
+    }
 
     return 0;
 }
@@ -627,6 +636,50 @@ Board getBoardTypeFromString(std::string board_name)
     if (board_name == "tiny2040")     return Board::Tiny2040;
     if (board_name == "tiny2040_2mb") return Board::Tiny2040_2mb;
     if (board_name == "badger2040")   return Board::Badger2040;
+    if (board_name == "gamebuino")    return Board::Gamebuino;
 
     throw fmt::format("Invalid board: '{}'.", board_name);
+}
+
+std::string generateParameters(std::string descriptor)
+{
+    std::string ret;
+
+    int count = 0;
+    if (descriptor[0] != '(')
+    {
+        throw fmt::format("Invalid descriptor. Should start with '(', got '{}'!", descriptor[0]);
+    }
+
+    int arrayCount = 0;
+    for (size_t index = 1; index < descriptor.size(); ++index)
+    {
+        switch (descriptor[index])
+        {
+        case ')':
+            index = descriptor.size();
+            break;
+        case 'L':
+            while (descriptor[index] != ';') ++index;
+            throw fmt::format("classes are not supported as function arguments.");
+            break;
+        case 'I':
+        case 'Z':
+            ret += fmt::format(", int {}local_{}", std::string(arrayCount, '*'), count);
+            arrayCount = 0;
+            ++count;
+            break;
+        case '[':
+            ++arrayCount;
+            break;
+        default:
+            throw fmt::format("Invalid character in descriptor: '{}'.", descriptor[index]);
+        }
+    }
+
+    if (ret.size() > 0)
+    {
+        ret = ret.substr(2);
+    }
+    return ret;
 }

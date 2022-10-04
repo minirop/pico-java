@@ -345,11 +345,11 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             else if (std::holds_alternative<std::string>(v))
             {
                 auto str = std::get<std::string>(v);
-                assert(false);
                 op.store.arr_type = "std::string";
                 if (localType != T_STRING)
                 {
                     op.store.type =  op.store.arr_type;
+                    op.store.value = str;
                     locals[index] = T_STRING;
                 }
             }
@@ -862,6 +862,93 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             stack.push_back(fmt::format("static_cast<double>({})", getAsString(value)));
             break;
         }
+        case invokevirtual:
+        {
+            auto id = r16();
+            auto method = std::get<Methodref>(constantPool[id]);
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
+            auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
+
+            auto argsCount = countArgs(descriptor);
+
+            auto objOffset = stack.size() - argsCount - 1;
+            auto objRef = getAsString(stack[objOffset]);
+
+            auto fullName = fmt::format("{}.{}", objRef, methodName);
+            boost::replace_all(fullName, "/"s, "::"s);
+
+            std::string argsString;
+            if (argsCount && argsCount <= stack.size())
+            {
+                auto offset = stack.size() - argsCount;
+                for (size_t idx = 0; idx < argsCount; ++idx)
+                {
+                    argsString += fmt::format(", {}", getAsString(stack[offset + idx]));
+                }
+
+                argsString = argsString.substr(2);
+
+                auto tmpArgsCount = argsCount;
+                while (tmpArgsCount > 0)
+                {
+                    --tmpArgsCount;
+                    stack.pop_back();
+                }
+            }
+
+            auto callString = fmt::format("{}({});", fullName, argsString);
+            auto retType = getReturnType(descriptor);
+            if (retType.size() && retType != "void")
+            {
+                stack.push_back(callString);
+            }
+            else
+            {
+                Operation op;
+                op.type = OpType::Call;
+                op.call.code = callString;
+                operations.push_back(op);
+            }
+            break;
+        }
+        case ifeq:
+        case ifne:
+        case iflt:
+        case ifge:
+        case ifgt:
+        case ifle:
+        {
+            auto correction = buffer_size - buffer.size() - 1;
+            auto offset = s16();
+            auto absolute = start_pc + correction + offset;
+
+            auto value = stack.back();
+            stack.pop_back();
+
+            std::string binop;
+            switch (opcode)
+            {
+            case ifeq: binop = "!="; break;
+            case ifne: binop = "=="; break;
+            case iflt: binop = ">="; break;
+            case ifge: binop =  "<"; break;
+            case ifgt: binop = "<="; break;
+            case ifle: binop =  ">"; break;
+            default: assert(false);
+            }
+
+
+            Operation op;
+            op.type = OpType::Cond;
+            op.cond.op = binop;
+            op.cond.left = getAsString(value);
+            op.cond.right = "0";
+            op.cond.absolute = absolute;
+
+            operations.push_back(op);
+            break;
+        }
         default:
             throw fmt::format("Unhandled opcode: '{:x}'.", opcode);
         }
@@ -1145,6 +1232,7 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
         {
             output = fmt::format("if ({} {} {})", l, binop, r);
             closingBrackets.insert(getLineFromOpcode(absolute));
+            localsTypes.push_back({});
         }
         break;
     }

@@ -30,7 +30,6 @@ struct Instruction
 {
     u4 position;
     std::string opcode;
-    std::optional<std::string> label;
 };
 
 struct FunctionData
@@ -143,6 +142,7 @@ enum
     return_ = 0xb1,
     getstatic = 0xb2,
     putstatic = 0xb3,
+    invokevirtual = 0xb6,
     invokestatic = 0xb8,
     invokedynamic = 0xba,
     newarray = 0xbc,
@@ -202,6 +202,7 @@ enum class Board
     Tiny2040,
     Tiny2040_2mb,
     Badger2040,
+    Gamebuino,
 };
 
 struct Fieldref
@@ -299,6 +300,7 @@ extern std::vector<std::string> callbacksMethods;
 std::string getStringFromUtf8(int index);
 u4 countArgs(std::string str);
 std::string getReturnType(std::string descriptor);
+std::string generateParameters(std::string descriptor);
 
 #define UNDEFINED_POSITION 999999
 

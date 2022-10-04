@@ -1,7 +1,8 @@
+import board.*;
 import pico.*;
 import pimoroni.*;
 
-@board(BoardType.Tiny2040)
+@Board(Type.Tiny2040)
 class ButtonBlinky
 {
 	public static int IRQ_PIN = 3;

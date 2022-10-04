@@ -8,11 +8,13 @@ LIBS += -lfmt
 DESTDIR = bin
 
 SOURCES += \
+        boards/gamebuino.cpp \
         boards/pico.cpp \
         lineanalyser.cpp \
         main.cpp
 
 HEADERS += \
+    boards/gamebuino.h \
     boards/pico.h \
     globals.h \
     lineanalyser.h

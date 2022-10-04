@@ -1,5 +1,5 @@
 #include "pico.h"
-#include <globals.h>
+#include "globals.h"
 #include <fstream>
 #include <filesystem>
 #include <fmt/format.h>
@@ -9,7 +9,6 @@ namespace fs = std::filesystem;
 std::set<std::string> usedFieldNames;
 
 std::string get_cmake_board_name(Board board);
-std::string generateParameters(std::string descriptor);
 
 void build_pico(std::string project_name, Board board)
 {
@@ -28,11 +27,10 @@ void build_pico(std::string project_name, Board board)
         }
     }
 
-    auto currentPath = fs::current_path();
     auto tempPath = fs::temp_directory_path();
     std::string tempDir = "java-pico";
 
-    std::string libs;
+    auto currentPath = fs::current_path();
     fs::current_path(tempPath);
     fs::create_directories(tempDir + "/build");
     fs::current_path(tempPath / tempDir);
@@ -86,11 +84,6 @@ void build_pico(std::string project_name, Board board)
         int depth = 0;
         for (auto & inst : func.instructions)
         {
-            if (inst.label.has_value())
-            {
-                output_c << inst.label.value() << ":\n";
-            }
-
             if (inst.opcode == "}") --depth;
             if (inst.opcode.size())
             {
@@ -110,6 +103,7 @@ void build_pico(std::string project_name, Board board)
 
     std::ofstream output_cmake("CMakeLists.txt");
 
+    std::string libs;
     if (board == Board::PicoW)
     {
         libs = "pico_cyw43_arch_none";
@@ -345,42 +339,4 @@ std::string get_cmake_board_name(Board board)
     if (board == Board::Badger2040)   return "pimoroni_badger2040";
 
     throw fmt::format("Unknown board {}!", std::to_underlying(board));
-}
-
-std::string generateParameters(std::string descriptor)
-{
-    std::string ret;
-
-    int count = 0;
-    if (descriptor[0] != '(')
-    {
-        throw fmt::format("Invalid descriptor. Should start with '(', got '{}'!", descriptor[0]);
-    }
-
-    for (size_t index = 1; index < descriptor.size(); ++index)
-    {
-        switch (descriptor[index])
-        {
-        case ')':
-            index = descriptor.size();
-            break;
-        case 'L':
-            while (descriptor[index] != ';') ++index;
-            throw fmt::format("classes are not supported as function arguments.");
-            break;
-        case 'I':
-        case 'Z':
-            ret += fmt::format(", int local_{}", count);
-            ++count;
-            break;
-        default:
-            throw fmt::format("Invalid character in descriptor: '{}'.", descriptor[index]);
-        }
-    }
-
-    if (ret.size() > 0)
-    {
-        ret = ret.substr(2);
-    }
-    return ret;
 }
