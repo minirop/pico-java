@@ -28,7 +28,10 @@ u4 countArgs(std::string str)
         case 'I':
         case 'Z':
         case 'F':
+        case 'B':
             ++count;
+            break;
+        case '[':
             break;
         default:
             throw fmt::format("Invalid or unhandled type used as a parameter type: '{}'.", str[index]);
@@ -268,7 +271,7 @@ int main(int argc, char** argv)
             auto name = getStringFromUtf8(name_index);
             auto descriptor = getStringFromUtf8(descriptor_index);
 
-            fields.push_back({ name, getTypeFromDescriptor(descriptor) });
+            fields.push_back({ name, getTypeFromDescriptor(descriptor), descriptor[0] == '[' });
         }
     }
 
@@ -514,17 +517,19 @@ int main(int argc, char** argv)
             }
         }
 
-        if (name == "<clinit>")
+        if (name == STATIC_INIT)
         {
-            name = "static_init";
+            lineAnalyser(code, STATIC_INIT, lineNumbers);
         }
+        else
+        {
+            FunctionData funData;
+            funData.name = name;
+            funData.descriptor = descriptor;
+            funData.instructions = lineAnalyser(code, name, lineNumbers);
 
-        FunctionData funData;
-        funData.name = name;
-        funData.descriptor = descriptor;
-        funData.instructions = lineAnalyser(code, name, lineNumbers);
-
-        functions.push_back(funData);
+            functions.push_back(funData);
+        }
     }
 
     auto board = getBoardTypeFromString(board_name);
@@ -596,9 +601,26 @@ attribute_info readAttribute(Buffer & buffer)
 
 std::string getTypeFromDescriptor(std::string descriptor)
 {
+    int count = 0;
+    while (descriptor.size() && descriptor.front() == '[')
+    {
+        descriptor.erase(descriptor.begin());
+        ++count;
+    }
+
     if (descriptor == "I")
     {
         return "int";
+    }
+
+    if (descriptor == "B")
+    {
+        return "uint8_t";
+    }
+
+    if (descriptor == "Lgamebuino/Image;")
+    {
+        return "Image";
     }
 
     throw fmt::format("Invalid type used as a static field: '{}'.", descriptor);

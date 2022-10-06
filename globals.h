@@ -43,6 +43,8 @@ struct FieldData
 {
     std::string name;
     std::string type;
+    bool isArray = false;
+    std::optional<std::string> init = {};
 };
 
 extern std::vector<FunctionData> functions;
@@ -111,13 +113,16 @@ enum
     fastore = 0x51,
     dastore = 0x52,
     aastore = 0x53,
+    bastore = 0x54,
     pop = 0x57,
     dup_ = 0x59,
     iadd = 0x60,
+    isub = 0x64,
     imul = 0x68,
     lmul = 0x69,
     fmul_ = 0x6a,
     dmul = 0x6b,
+    idiv = 0x6c,
     irem = 0x70,
     ishl = 0x78,
     iand = 0x7e,
@@ -143,8 +148,10 @@ enum
     getstatic = 0xb2,
     putstatic = 0xb3,
     invokevirtual = 0xb6,
+    invokespecial = 0xb7,
     invokestatic = 0xb8,
     invokedynamic = 0xba,
+    new_ = 0xbb,
     newarray = 0xbc,
     anewarray = 0xbd,
     arraylength = 0xbe,
@@ -302,6 +309,7 @@ u4 countArgs(std::string str);
 std::string getReturnType(std::string descriptor);
 std::string generateParameters(std::string descriptor);
 
-#define UNDEFINED_POSITION 999999
+#define STATIC_INIT "<clinit>"
+#define CONSTRUCTOR "<init>"
 
 #endif // GLOBALS_H

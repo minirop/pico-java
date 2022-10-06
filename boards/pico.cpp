@@ -44,7 +44,14 @@ void build_pico(std::string project_name, Board board)
         output_c << "\n" << "namespace " << project_name << "\n{\n";
         for (auto & field : fields)
         {
-            output_c << '\t' << field.type << " " << field.name << ";\n";
+            output_c << '\t' << field.type << " " << field.name;
+
+            if (field.init.has_value())
+            {
+                output_c << " = " << field.init.value();
+            }
+
+            output_c << ";\n";
         }
         for (auto & func : functions)
         {
@@ -54,15 +61,6 @@ void build_pico(std::string project_name, Board board)
             }
         }
         output_c << "}\n";
-    }
-
-    bool has_static_init = false;
-    for (auto & func : functions)
-    {
-        if (func.name == "static_init")
-        {
-            has_static_init = true;
-        }
     }
 
     for (auto & func : functions)
@@ -76,10 +74,6 @@ void build_pico(std::string project_name, Board board)
         }
 
         output_c << (isMain ? "int" : getReturnType(func.descriptor)) << " " << func.name << "(" << (isMain ? "" : generateParameters(func.descriptor)) << ")\n{\n";
-        if (isMain && has_static_init)
-        {
-            output_c << "\t" << project_name << "::static_init();\n";
-        }
 
         int depth = 0;
         for (auto & inst : func.instructions)

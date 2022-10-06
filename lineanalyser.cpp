@@ -1,4 +1,5 @@
 #include "lineanalyser.h"
+#include "boards/gamebuino.h"
 #include <bit>
 #include <endian.h>
 #include <optional>
@@ -39,6 +40,17 @@ std::string getType(int type)
 }
 
 std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position);
+std::string invertBinaryOperator(std::string binop)
+{
+    if (binop == "!=") return "==";
+    if (binop == "==") return "!=";
+    if (binop == ">=") return  "<";
+    if (binop ==  "<") return ">=";
+    if (binop == "<=") return ">";
+    if (binop ==  ">") return  "<=";
+
+    assert(false);
+}
 
 std::vector<std::unordered_map<u4, u4>> localsTypes;
 std::vector<Instruction> insts;
@@ -65,13 +77,19 @@ u2 getLineFromOpcode(u2 opcode)
 {
     auto & lineNumbers = *lines;
 
+    u2 lastLineSaw = 0;
+
     for (size_t i = 0; i < lineNumbers.size() - 1; ++i)
     {
         auto pc = std::get<0>(lineNumbers[i]);
         auto nb = std::get<1>(lineNumbers[i]);
-        if (opcode <= pc)
+        if (lastLineSaw <= nb)
         {
-            return nb;
+            if (opcode <= pc)
+            {
+                return nb;
+            }
+            lastLineSaw = nb;
         }
     }
 
@@ -176,7 +194,17 @@ std::string getAsString(const Value & value)
         }
         else if constexpr (std::is_same_v<T, Array>)
         {
-            return std::string{};
+            std::string output;
+            for (size_t i = 0; i < arg.populate.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    output += ", ";
+                }
+                output += arg.populate[i];
+            }
+
+            return fmt::format("{{ {} }}", output);
         }
         else
         {
@@ -289,6 +317,10 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             if (className == "java/lang/String")
             {
                 cppType = "std::string";
+            }
+            else if (className == "java/lang/Object")
+            {
+                cppType = "Object";
             }
             else
             {
@@ -521,7 +553,6 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             default: assert(false);
             }
 
-
             Operation op;
             op.type = OpType::Cond;
             op.cond.op = binop;
@@ -606,6 +637,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         case fastore:
         case lastore:
         case dastore:
+        case bastore:
         {
             auto value = stack.back();
             stack.pop_back();
@@ -626,6 +658,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             else if (std::holds_alternative<Array>(arr))
             {
                 auto orig = stack.back();
+                stack.pop_back();
                 std::get<Array>(orig).populate.push_back(getAsString(value));
                 stack.push_back(orig);
             }
@@ -675,6 +708,21 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto method = std::get<Methodref>(constantPool[id]);
             auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
             auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+
+            if (className == "java/lang/Integer")
+            {
+                if (methodName == "valueOf")
+                {
+                    // do nothing, leave the int on the stack
+                    break;
+                }
+                else
+                {
+                    throw fmt::format("Method '{}' on class '{}' not handled.", methodName, className);
+                }
+            }
+
+
             auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
             auto fullName = fmt::format("{}::{}", className, methodName);
             boost::replace_all(fullName, "/"s, "::"s);
@@ -699,7 +747,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 }
             }
 
-            auto callString = fmt::format("{}({});", fullName, argsString);
+            auto callString = fmt::format("{}({})", fullName, argsString);
             auto retType = getReturnType(descriptor);
             if (retType.size() && retType != "void")
             {
@@ -709,7 +757,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             {
                 Operation op;
                 op.type = OpType::Call;
-                op.call.code = callString;
+                op.call.code = callString + ';';
                 operations.push_back(op);
             }
             break;
@@ -758,10 +806,23 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto val = stack.back();
             stack.pop_back();
 
-            Operation op;
-            op.type = OpType::Call;
-            op.call.code = fmt::format("{} = {};", fullName, getAsString(val));
-            operations.push_back(op);
+            if (name == STATIC_INIT)
+            {
+                for (auto & f : fields)
+                {
+                    if (f.name == variableName)
+                    {
+                        f.init = getAsString(val);
+                    }
+                }
+            }
+            else
+            {
+                Operation op;
+                op.type = OpType::Call;
+                op.call.code = fmt::format("{} = {};", fullName, getAsString(val));
+                operations.push_back(op);
+            }
             break;
         }
         case newarray:
@@ -862,6 +923,101 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             stack.push_back(fmt::format("static_cast<double>({})", getAsString(value)));
             break;
         }
+        case invokespecial:
+        {
+            auto id = r16();
+            auto method = std::get<Methodref>(constantPool[id]);
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
+            auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+            auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
+
+            auto argsCount = countArgs(descriptor);
+
+            auto objOffset = stack.size() - argsCount - 1;
+            auto objRef = getAsString(stack[objOffset]);
+
+            std::string fullName;
+            if (methodName == CONSTRUCTOR)
+            {
+                fullName = fmt::format("{}", objRef);
+                boost::replace_all(fullName, "/"s, "::"s);
+            }
+            else
+            {
+                throw fmt::format("invoke special on something that is not a constructor.");
+            }
+
+            std::string argsString;
+
+            if (argsCount && argsCount <= stack.size())
+            {
+                auto offset = stack.size() - argsCount;
+                if (className == "gamebuino/Image")
+                {
+                    if (argsCount == 2)
+                    {
+                        auto filename = std::get<std::string>(stack[offset + 0]);
+                        boost::replace_all(filename, "\""s, ""s);
+                        auto sFormat = getAsString(stack[offset + 1]);
+                        auto format = (sFormat.ends_with("Rgb565")) ? Format::Rgb565 : Format::Indexed;
+                        add_resource(filename, format);
+                        argsString = ", " + encode_filename(filename);
+                    }
+                    else if (descriptor == "([B)V")
+                    {
+                        auto array = std::get<std::string>(stack[offset]);
+                        argsString = ", " + array;
+                    }
+                    else
+                    {
+                        assert(false);
+                    }
+                }
+                else
+                {
+                    for (size_t idx = 0; idx < argsCount; ++idx)
+                    {
+                        argsString += fmt::format(", {}", getAsString(stack[offset + idx]));
+                    }
+                }
+
+                argsString = argsString.substr(2);
+
+                auto tmpArgsCount = argsCount;
+                while (tmpArgsCount > 0)
+                {
+                    --tmpArgsCount;
+                    stack.pop_back();
+                }
+            }
+
+            // remove "this"
+            stack.pop_back();
+
+            auto callString = fmt::format("{}({})", fullName, argsString);
+            if (objRef == className)
+            {
+                stack.pop_back();
+                stack.push_back(callString);
+            }
+            else
+            {
+                callString += ';';
+                auto retType = getReturnType(descriptor);
+                if ((retType.size() && retType != "void"))
+                {
+                    stack.push_back(callString);
+                }
+                else
+                {
+                    Operation op;
+                    op.type = OpType::Call;
+                    op.call.code = callString;
+                    operations.push_back(op);
+                }
+            }
+            break;
+        }
         case invokevirtual:
         {
             auto id = r16();
@@ -882,9 +1038,21 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             if (argsCount && argsCount <= stack.size())
             {
                 auto offset = stack.size() - argsCount;
-                for (size_t idx = 0; idx < argsCount; ++idx)
+                if (fullName == "gamebuino::gb::display.printf")
                 {
-                    argsString += fmt::format(", {}", getAsString(stack[offset + idx]));
+                    argsString += fmt::format(", {}", getAsString(stack[offset]));
+                    auto arr = std::get<Array>(stack[offset + 1]);
+                    for (auto p : arr.populate)
+                    {
+                        argsString += fmt::format(", {}", p);
+                    }
+                }
+                else
+                {
+                    for (size_t idx = 0; idx < argsCount; ++idx)
+                    {
+                        argsString += fmt::format(", {}", getAsString(stack[offset + idx]));
+                    }
                 }
 
                 argsString = argsString.substr(2);
@@ -897,7 +1065,10 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 }
             }
 
-            auto callString = fmt::format("{}({});", fullName, argsString);
+            // remove "this"
+            stack.pop_back();
+
+            auto callString = fmt::format("{}({})", fullName, argsString);
             auto retType = getReturnType(descriptor);
             if (retType.size() && retType != "void")
             {
@@ -907,7 +1078,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             {
                 Operation op;
                 op.type = OpType::Call;
-                op.call.code = callString;
+                op.call.code = callString + ';';
                 operations.push_back(op);
             }
             break;
@@ -949,6 +1120,33 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             operations.push_back(op);
             break;
         }
+        case new_:
+        {
+            auto index = r16();
+            auto className = getStringFromUtf8(std::get<Class>(constantPool[index]).name_index);
+            stack.push_back(className);
+            break;
+        }
+        case idiv:
+        {
+            auto right = stack.back();
+            stack.pop_back();
+            auto left = stack.back();
+            stack.pop_back();
+
+            stack.push_back(fmt::format("({} / {})", getAsString(left), getAsString(right)));
+            break;
+        }
+        case isub:
+        {
+            auto right = stack.back();
+            stack.pop_back();
+            auto left = stack.back();
+            stack.pop_back();
+
+            stack.push_back(fmt::format("({} - {})", getAsString(left), getAsString(right)));
+            break;
+        }
         default:
             throw fmt::format("Unhandled opcode: '{:x}'.", opcode);
         }
@@ -957,10 +1155,20 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
     bool addOpeningParen = false;
     switch (operations.size())
     {
+    case 0: // ???
+        break;
     case 1:
+    case 3:
     {
         auto op = operations[0];
         inst.opcode = generateCodeFromOperation(op, start_pc, addOpeningParen);
+
+        for (size_t size = 1; size < operations.size(); ++size)
+        {
+            Instruction tmp;
+            tmp.opcode = generateCodeFromOperation(operations[size], start_pc, addOpeningParen);
+            lineInsts.push_back(tmp);
+        }
         break;
     }
     case 2:
@@ -1010,6 +1218,34 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 lineInsts.push_back(tmp);
             }
         }
+        else if (o1.type == OpType::Cond && o2.type == OpType::Cond)
+        {
+            auto & c1 = operations[0].cond;
+            auto & c2 = operations[1].cond;
+            auto absolute1 = c1.absolute;
+            auto absolute2 = c2.absolute;
+            auto isGoto = (*fullBuffer)[absolute1 - 3] == goto_ || (*fullBuffer)[absolute2 - 3] == goto_;
+
+            std::string andOrOr;
+            if (absolute1 == absolute2)
+            {
+                // AND
+                andOrOr = "&&";
+            }
+            else
+            {
+                // OR
+                andOrOr = "||";
+                c1.op = invertBinaryOperator(c1.op);
+            }
+
+            inst.opcode = fmt::format("if ({} {} {} {} {} {} {})",
+                                      c1.left, c1.op, c1.right,
+                                      andOrOr,
+                                      c2.left, c2.op, c2.right);
+            addOpeningParen = true;
+            closingBrackets.insert(getLineFromOpcode(absolute2));
+        }
         else
         {
             inst.opcode = generateCodeFromOperation(operations[0], start_pc, addOpeningParen);
@@ -1051,8 +1287,6 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
 
             closingBrackets.insert(getLineFromOpcode(o2.cond.absolute));
             addOpeningParen = true;
-
-            localsTypes.push_back({});
         }
         else
         {
@@ -1067,6 +1301,10 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             }
         }
         break;
+    }
+    case 5:
+    {
+        //break;
     }
     default:
     {
@@ -1118,6 +1356,8 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         Instruction openingBracket;
         openingBracket.opcode = "{";
         lineInsts.push_back(openingBracket);
+
+        localsTypes.push_back({});
     }
 
     return lineInsts;
@@ -1213,15 +1453,11 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
             {
                 output = fmt::format("while ({} {} {})", l, binop, r);
                 closingBrackets.insert(getLineFromOpcode(absolute));
-
-                localsTypes.push_back({});
             }
             else if (target > start_pc)
             {
                 output = fmt::format("if ({} {} {})", l, binop, r);
                 closingBrackets.insert(getLineFromOpcode(absolute));
-
-                localsTypes.push_back({});
             }
             else
             {
@@ -1232,7 +1468,6 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
         {
             output = fmt::format("if ({} {} {})", l, binop, r);
             closingBrackets.insert(getLineFromOpcode(absolute));
-            localsTypes.push_back({});
         }
         break;
     }
