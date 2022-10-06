@@ -10,11 +10,11 @@ DESTDIR = bin
 SOURCES += \
         boards/gamebuino.cpp \
         boards/pico.cpp \
-        lineanalyser.cpp \
+        classfile.cpp \
         main.cpp
 
 HEADERS += \
     boards/gamebuino.h \
     boards/pico.h \
-    globals.h \
-    lineanalyser.h
+    classfile.h \
+    globals.h

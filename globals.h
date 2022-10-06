@@ -47,9 +47,6 @@ struct FieldData
     std::optional<std::string> init = {};
 };
 
-extern std::vector<FunctionData> functions;
-extern std::vector<FieldData> fields;
-
 enum
 {
     iconst_0 = 0x03,
@@ -301,15 +298,20 @@ using Constant = std::variant<std::monostate
                             , s4
                             , s8>;
 using ConstantPool = std::vector<Constant>;
-extern ConstantPool constantPool;
-extern std::vector<std::string> callbacksMethods;
 
-std::string getStringFromUtf8(int index);
 u4 countArgs(std::string str);
 std::string getReturnType(std::string descriptor);
 std::string generateParameters(std::string descriptor);
 
 #define STATIC_INIT "<clinit>"
 #define CONSTRUCTOR "<init>"
+
+enum class Format
+{
+    Rgb565,
+    Indexed,
+};
+
+std::string javaToCpp(std::string name);
 
 #endif // GLOBALS_H

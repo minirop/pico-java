@@ -12,7 +12,7 @@ struct Resource
 
 std::vector<Resource> resources;
 
-void build_gamebuino(std::string project_name)
+void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
 {
     if (system("which arduino-cli") != 0)
     {
@@ -27,78 +27,10 @@ void build_gamebuino(std::string project_name)
     fs::create_directories(project_name + "/build");
     fs::current_path(tempPath / project_name);
 
-    std::ofstream output_c(project_name + ".ino");
-
-    output_c << "#include \"gamebuino-java.h\"\n";
-    if (resources.size())
+    for (auto & file : files)
     {
-        output_c << "#include \"resources.h\"\n";
+        file.generate(project_name);
     }
-
-    output_c << "#if __has_include(\"userfile.h\")\n"
-             << "#include \"userfile.h\"\n"
-             << "#endif\n";
-
-    if (fields.size())
-    {
-        output_c << '\n';
-
-        output_c << "namespace " << project_name << " {\n";
-
-        for (auto & field : fields)
-        {
-            output_c << '\t' << field.type;
-            if (!field.init.has_value() && field.isArray)
-            {
-                output_c << '*';
-            }
-            output_c << " " << field.name;
-
-            if (field.init.has_value())
-            {
-                if (field.isArray)
-                {
-                    output_c << "[]";
-                }
-                output_c << " = " << field.init.value();
-            }
-
-            output_c << ";\n";
-        }
-
-        output_c << "}\n";
-    }
-
-    if (functions.size())
-    {
-        output_c << '\n';
-
-        for (auto & func : functions)
-        {
-            output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
-        }
-    }
-
-    for (auto & func : functions)
-    {
-        output_c << '\n';
-
-        output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ")\n{\n";
-
-        int depth = 0;
-        for (auto & inst : func.instructions)
-        {
-            if (inst.opcode == "}") --depth;
-            if (inst.opcode.size())
-            {
-                output_c << std::string(depth + 1, '\t') << inst.opcode << '\n';
-            }
-            if (inst.opcode == "{") ++depth;
-        }
-        output_c << "}\n";
-    }
-
-    output_c.close();
 
     std::ofstream output_header("gamebuino-java.h");
 
@@ -132,9 +64,8 @@ namespace gamebuino {
 
     if (resources.size())
     {
-        std::ofstream output_res_header("resources.h");
+        std::ofstream output_res_header("resources.ino");
 
-        bool hasCustomResources = false;
         for (auto & res : resources)
         {
             if (fs::exists(currentPath / res.filename))
@@ -144,22 +75,18 @@ namespace gamebuino {
                                   << " " << encode_filename(res.filename) << "[] = {\n";
                 output_res_header << "};\n";
             }
-            else
-            {
-                hasCustomResources = true;
-            }
         }
 
         output_res_header.close();
     }
 
-    if (fs::exists(currentPath / "userfile.h"))
+    if (fs::exists(currentPath / "userdata.ino"))
     {
-        fs::copy_file(currentPath / "userfile.h", fs::current_path() / "userfile.h", fs::copy_options::overwrite_existing);
+        fs::copy_file(currentPath / "userdata.ino", fs::current_path() / "userdata.ino", fs::copy_options::overwrite_existing);
     }
     else
     {
-        fs::remove(fs::current_path() / "userfile.h");
+        fs::remove(fs::current_path() / "userdata.ino");
     }
 
     fs::current_path(tempPath / project_name);

@@ -10,8 +10,8 @@ std::set<std::string> usedFieldNames;
 
 std::string get_cmake_board_name(Board board);
 
-void build_pico(std::string project_name, Board board)
-{
+void build_pico(std::string project_name, Board board, std::vector<ClassFile> files)
+{/*
     if (!getenv("PICO_SDK_PATH"))
     {
         fmt::print("$PICO_SDK_PATH is not set nor accessible. Aborting.\n");
@@ -321,7 +321,7 @@ namespace pimoroni
     fs::current_path(tempPath / tempDir / "build");
     system("cmake ..");
     system("make");
-    system(fmt::format("cp {}.uf2 {}", project_name, currentPath.string()).data());
+    system(fmt::format("cp {}.uf2 {}", project_name, currentPath.string()).data());*/
 }
 
 std::string get_cmake_board_name(Board board)

@@ -1,16 +1,15 @@
-#include "lineanalyser.h"
+#include "classfile.h"
 #include "boards/gamebuino.h"
-#include <bit>
-#include <endian.h>
-#include <optional>
-#include <type_traits>
+#include <fstream>
 
+namespace fs = std::filesystem;
 using namespace std::string_literals;
 
 enum
 {
     T_NONE    = 0,
     T_STRING  = 1,
+    T_OBJECT  = 2,
     T_ARRAY   = 3,
     T_BOOLEAN = 4,
     T_CHAR    = 5,
@@ -39,7 +38,101 @@ std::string getType(int type)
     throw fmt::format("Invalid type: '{}'.", type);
 }
 
-std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position);
+attribute_info readAttribute(Buffer & buffer)
+{
+    attribute_info info;
+
+    info.attribute_name_index = r16();
+    auto length = r32();
+    info.attribute_length = length;
+
+    for (u4 i = 0; i < length; ++i)
+    {
+        info.info.push_back(r8());
+    }
+
+    return info;
+}
+
+std::string getTypeFromDescriptor(std::string descriptor)
+{
+    int count = 0;
+    while (descriptor.size() && descriptor.front() == '[')
+    {
+        descriptor.erase(descriptor.begin());
+        ++count;
+    }
+
+    if (descriptor == "I")
+    {
+        return "int";
+    }
+
+    if (descriptor == "B")
+    {
+        return "uint8_t";
+    }
+
+    if (descriptor == "Lgamebuino/Image;")
+    {
+        return "Image";
+    }
+
+    throw fmt::format("Invalid type used as a static field: '{}'.", descriptor);
+}
+
+template<class> inline constexpr bool always_false_v = false;
+
+std::string getAsString(const Value & value)
+{
+    return std::visit([](auto&& arg) {
+        using T = std::decay_t<decltype(arg)>;
+
+        if constexpr (std::is_same_v<T, int>)
+        {
+            return fmt::format("{}", arg);
+        }
+        else if constexpr (std::is_same_v<T, long>)
+        {
+            return fmt::format("{}L", arg);
+        }
+        else if constexpr (std::is_same_v<T, float>)
+        {
+            return fmt::format("{}f", arg);
+        }
+        else if constexpr (std::is_same_v<T, double>)
+        {
+            return fmt::format("{}", arg);
+        }
+        else if constexpr (std::is_same_v<T, std::string>)
+        {
+            return arg;
+        }
+        else if constexpr (std::is_same_v<T, Array>)
+        {
+            std::string output;
+            for (size_t i = 0; i < arg.populate.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    output += ", ";
+                }
+                output += arg.populate[i];
+            }
+
+            return fmt::format("{{ {} }}", output);
+        }
+        else if constexpr (std::is_same_v<T, Object>)
+        {
+            return arg.type;
+        }
+        else
+        {
+            static_assert(always_false_v<T>, "non-exhaustive visitor!");
+        }
+    }, value);
+}
+
 std::string invertBinaryOperator(std::string binop)
 {
     if (binop == "!=") return "==";
@@ -52,65 +145,537 @@ std::string invertBinaryOperator(std::string binop)
     assert(false);
 }
 
-std::vector<std::unordered_map<u4, u4>> localsTypes;
-std::vector<Instruction> insts;
-std::unordered_map<u4, u4> closingBraces;
-std::set<u4> skippedGotos;
-Buffer * fullBuffer = nullptr;
+static std::set<std::string> nonNamespacedFunction = {
+    "loop"s, "setup"s, "main"s,
+};
 
-int findLocal(int index)
+ClassFile::ClassFile(std::string filename)
 {
-    for (auto it = localsTypes.rbegin(); it != localsTypes.rend(); ++it)
+    fileName = filename.substr(0, filename.find('.'));
+    std::ifstream file(fileName + ".class", std::ios::binary);
+
+    file.seekg(0, std::ios::end);
+    auto fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    if (fileSize == 0)
     {
-        if (it->contains(index))
-        {
-            return it->operator [](index);
-        }
+        throw fmt::format("File is empty.");
     }
 
-    return T_NONE;
-}
+    Buffer buffer(fileSize);
+    file.read((char*) &buffer[0], fileSize);
 
-std::vector<std::tuple<u2, u2>> * lines = nullptr;
-
-u2 getLineFromOpcode(u2 opcode)
-{
-    auto & lineNumbers = *lines;
-
-    u2 lastLineSaw = 0;
-
-    for (size_t i = 0; i < lineNumbers.size() - 1; ++i)
+    auto magic = r32();
+    if (magic != 0xCAFEBABE)
     {
-        auto pc = std::get<0>(lineNumbers[i]);
-        auto nb = std::get<1>(lineNumbers[i]);
-        if (lastLineSaw <= nb)
+        throw fmt::format("Invalid class file. Wrong magic number.");
+    }
+
+    [[maybe_unused]] auto minor = r16();
+    [[maybe_unused]] auto major = r16();
+
+    constantPool.push_back({});
+    auto constant_pool_count = r16();
+    for (int i = 0; i < constant_pool_count - 1; ++i)
+    {
+        auto tag = r8();
+        switch (tag)
         {
-            if (opcode <= pc)
+        case CONSTANT_Utf8:
+        {
+            auto length = r16();
+            Utf8 info;
+            info.length = length;
+
+            for (int i = 0; i < length; ++i)
             {
-                return nb;
+                info.bytes.push_back(r8());
             }
-            lastLineSaw = nb;
+
+            constantPool.push_back(info);
+            break;
         }
-    }
-
-    return std::get<1>(lineNumbers[lineNumbers.size() - 1]);
-}
-
-u2 getOpcodeFromLine(u2 line)
-{
-    for (auto & l : *lines)
-    {
-        if (std::get<1>(l) == line)
+        case CONSTANT_Integer:
         {
-            return std::get<0>(l);
+            auto v = s32();
+            constantPool.push_back(v);
+            break;
+        }
+        case CONSTANT_Float:
+        {
+            auto v = r32();
+            auto info = std::bit_cast<float>(v);
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_Long:
+        {
+            auto h = r32();
+            auto l = r32();
+            s8 info = (s8{h} << 32) | l;
+            constantPool.push_back(info);
+            ++i;
+            constantPool.push_back({});
+            break;
+        }
+        case CONSTANT_Double:
+        {
+            auto h = r32();
+            auto l = r32();
+            u8 v = (s8{h} << 32) | l;
+            auto info = std::bit_cast<double>(v);
+            constantPool.push_back(info);
+            ++i;
+            constantPool.push_back({});
+            break;
+        }
+        case CONSTANT_Class:
+        {
+            Class info { r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_String:
+        {
+            String info { r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_Fieldref:
+        {
+            Fieldref info { r16(), r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_Methodref:
+        {
+            Methodref info { r16(), r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_InterfaceMethodref:
+        {
+            InterfaceMethodref info { r16(), r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_NameAndType:
+        {
+            NameAndType info { r16(), r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_MethodHandle:
+        {
+            MethodHandle info { r8(), r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_MethodType:
+        {
+            MethodType info { r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        case CONSTANT_InvokeDynamic:
+        {
+            InvokeDynamic info { r16(), r16() };
+            constantPool.push_back(info);
+            break;
+        }
+        default:
+            throw fmt::format("Unknown constant type: '{}'.", tag);
         }
     }
 
-    throw fmt::format("Invalid line given.");
+    [[maybe_unused]] auto access_flags = r16();
+    [[maybe_unused]] auto this_class = r16();
+    [[maybe_unused]] auto super_class = r16(); // TODO: check if super_class is object
+    auto interfaces_count = r16();
+    if (interfaces_count != 0)
+    {
+        throw fmt::format("The class must not have any interfaces.");
+    }
+
+    auto fields_count = r16();
+    for (u2 i = 0; i < fields_count; ++i)
+    {
+        auto access_flags = r16();
+        auto name_index = r16();
+        auto descriptor_index = r16();
+        auto attributes_count = r16();
+
+        if (attributes_count != 0)
+        {
+            throw fmt::format("Attributes on fields not handled.");
+        }
+
+        if ((access_flags & 0x0008) > 0)
+        {
+            auto name = getStringFromUtf8(name_index);
+            auto descriptor = getStringFromUtf8(descriptor_index);
+
+            fields.push_back({ name, getTypeFromDescriptor(descriptor), descriptor[0] == '[' });
+        }
+    }
+
+    struct MethData
+    {
+        std::string name;
+        std::string descriptor;
+        Buffer buffer;
+    };
+
+    std::vector<MethData> methodsToDecompile;
+
+    auto methods_count = r16();
+    for (int i = 0; i < methods_count; ++i)
+    {
+        auto access_flags = r16();
+        auto name_index = r16();
+        auto descriptor_index = r16();
+        auto attributes_count = r16();
+        std::vector<attribute_info> attributes;
+
+        for (u2 i = 0; i < attributes_count; ++i)
+        {
+            attributes.push_back(readAttribute(buffer));
+        }
+
+        if (access_flags & 0x0008)
+        {
+            auto name = getStringFromUtf8(name_index);
+            auto descriptor = getStringFromUtf8(descriptor_index);
+
+            for (auto & attr : attributes)
+            {
+                auto attribute_name = getStringFromUtf8(attr.attribute_name_index);
+
+                if (attribute_name == "Code")
+                {
+                    methodsToDecompile.push_back({ name, descriptor, attr.info });
+                }
+                else if (attribute_name == "LineNumberTable")
+                {
+                }
+                else
+                {
+                    throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
+                }
+            }
+        }
+    }
+
+    auto attributes_count = r16();
+    std::vector<attribute_info> attributes;
+
+    for (u2 i = 0; i < attributes_count; ++i)
+    {
+        attributes.push_back(readAttribute(buffer));
+        auto attribute_name = getStringFromUtf8(attributes.back().attribute_name_index);
+        if (attribute_name == "RuntimeInvisibleAnnotations")
+        {
+            auto buffer = attributes.back().info;
+
+            auto num_annotations = r16();
+            for (u2 ii = 0; ii < num_annotations; ++ii)
+            {
+                auto type_index = r16();
+                auto type_name = getStringFromUtf8(type_index);
+                auto num_element_value_pairs = r16();
+                for (u2 iii = 0; iii < num_element_value_pairs; ++iii)
+                {
+                    auto element_name_index = r16();
+                    auto element_name = getStringFromUtf8(element_name_index);
+
+                    // value: element_value
+                    auto tag = r8();
+                    if (tag != 'e')
+                    {
+                        throw fmt::format("Annotation '@Board' must contains an enumeration.");
+                    }
+
+                    if (type_name == "Lboard/Board;" && element_name == "value")
+                    {
+                        auto type_name_index = r16();
+                        auto type_name = getStringFromUtf8(type_name_index);
+                        auto const_name_index = r16();
+                        auto const_name = getStringFromUtf8(const_name_index);
+
+                        if (type_name == "Lboard/Type;")
+                        {
+                            board_name = const_name;
+                        }
+                        else
+                        {
+                            throw fmt::format("Annotation '@Board' must contains a board.Type value.");
+                        }
+
+                        iii = num_element_value_pairs;
+                        ii = num_annotations;
+                    }
+                }
+            }
+        }
+        else if (attribute_name == "SourceFile")
+        {
+        }
+        else if (attribute_name == "BootstrapMethods")
+        {
+            auto buffer = attributes.back().info;
+
+            u2 num_bootstrap_methods = r16();
+
+            for (u2 ii = 0; ii < num_bootstrap_methods; ++ii)
+            {
+                u2 bootstrap_method_ref = r16();
+                auto bootstrap_method_handle = std::get<MethodHandle>(constantPool[bootstrap_method_ref]);
+                auto bootstrap_method = std::get<Methodref>(constantPool[bootstrap_method_handle.reference_index]);
+                auto bootstrap_className = getStringFromUtf8(std::get<Class>(constantPool[bootstrap_method.class_index]).name_index);
+                auto bootstrap_descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[bootstrap_method.name_and_type_index]).descriptor_index);
+                auto bootstrap_methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[bootstrap_method.name_and_type_index]).name_index);
+
+                std::vector<std::string> args;
+                u2 num_bootstrap_arguments = r16();
+                for (u2 arg = 0; arg < num_bootstrap_arguments; ++arg)
+                {
+                    u2 bootstrap_argument = r16();
+                    auto bootstrap_pool = constantPool[bootstrap_argument];
+                    if (std::holds_alternative<MethodHandle>(bootstrap_pool))
+                    {
+                        auto handle = std::get<MethodHandle>(bootstrap_pool);
+                        if (handle.reference_kind != REF_invokeStatic)
+                        {
+                            throw fmt::format("Only static references are valid as a bootstrap method handle parameter.");
+                        }
+
+                        auto method = std::get<Methodref>(constantPool[handle.reference_index]);
+                        auto className = getStringFromUtf8(std::get<Class>(constantPool[method.class_index]).name_index);
+                        auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
+                        auto methodName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
+
+                        auto fullName = fmt::format("{}::{}", className, methodName);
+
+                        std::string caster;
+                        if (fullName == "ButtonBlinky::gpio_irq_callback")
+                        {
+                            caster = "(gpio_irq_callback_t)";
+                        }
+
+                        fullName = fmt::format("{}{}", caster, fullName);
+                        fullName = javaToCpp(fullName);
+
+                        args.push_back(fullName);
+                    }
+                    else if (std::holds_alternative<String>(bootstrap_pool))
+                    {
+                        auto data = std::get<String>(bootstrap_pool);
+                        auto str = getStringFromUtf8(data.string_index);
+                        args.push_back(str);
+                    }
+                    else if (std::holds_alternative<MethodType>(bootstrap_pool))
+                    {
+                        args.push_back("");
+                    }
+                    else
+                    {
+                        throw fmt::format("Unhandled parameter type for bootstrap method '{}' at index '{}'", bootstrap_methodName, arg);
+                    }
+                }
+
+                if (bootstrap_methodName == "makeConcatWithConstants")
+                {
+                    callbacksMethods.push_back(args[0]);
+                }
+                else if (bootstrap_methodName == "metafactory")
+                {
+                    callbacksMethods.push_back(args[1]);
+                }
+                else
+                {
+                    throw fmt::format("Unhandled bootstrap method: '{}'.", bootstrap_methodName);
+                }
+            }
+        }
+        else if (attribute_name == "InnerClasses")
+        {
+        }
+        else
+        {
+            throw fmt::format("Unhandled class attribute: '{}'.", attribute_name);
+        }
+    }
+
+    for (auto & meth : methodsToDecompile)
+    {
+        auto name = meth.name;
+        auto descriptor = meth.descriptor;
+        auto buffer = meth.buffer;
+
+        [[maybe_unused]] u2 max_stack = r16();
+        [[maybe_unused]] u2 max_locals = r16();
+        u4 code_length = r32();
+
+        Buffer code;
+        for (u4 i = 0; i < code_length; ++i)
+        {
+            code.push_back(r8());
+        }
+
+        u2 exception_table_length = r16();
+        for (u4 i = 0; i < exception_table_length; ++i)
+        {
+            [[maybe_unused]] u2 start_pc = r16();
+            [[maybe_unused]] u2 end_pc = r16();
+            [[maybe_unused]] u2 handler_pc = r16();
+            [[maybe_unused]] u2 catch_type = r16();
+        };
+
+        std::vector<std::tuple<u2, u2>> lineNumbers;
+
+        u2 attributes_count = r16();
+        for (u2 i = 0; i < attributes_count; ++i)
+        {
+            attributes.push_back(readAttribute(buffer));
+            auto attribute_name = getStringFromUtf8(attributes.back().attribute_name_index);
+            if (attribute_name == "LineNumberTable")
+            {
+                auto buffer = attributes.back().info;
+                u2 line_number_table_length = r16();
+                for (u2 a = 0; a < line_number_table_length; ++a)
+                {
+                    u2 start_pc = r16();
+                    u2 line_number = r16();
+
+                    lineNumbers.emplace_back(start_pc, line_number);
+                }
+            }
+            else if (attribute_name == "StackMapTable")
+            {
+            }
+            else
+            {
+                throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
+            }
+        }
+
+        if (name == STATIC_INIT)
+        {
+            lineAnalyser(code, STATIC_INIT, lineNumbers);
+        }
+        else
+        {
+            FunctionData funData;
+            funData.name = name;
+            funData.descriptor = descriptor;
+            funData.instructions = lineAnalyser(code, name, lineNumbers);
+
+            functions.push_back(funData);
+        }
+    }
 }
 
-std::multiset<u4> closingBrackets, elseStmts;
-std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<std::tuple<u2, u2>> lineNumbers)
+bool ClassFile::hasBoard() const
+{
+    return board_name.size() > 0;
+}
+
+std::string ClassFile::boardName() const
+{
+    return board_name;
+}
+
+void ClassFile::generate(std::string project_name)
+{
+    std::ofstream output_c(fileName + ".ino");
+
+    output_c << "#include \"gamebuino-java.h\"\n";
+
+    if (fields.size())
+    {
+        output_c << '\n';
+
+        output_c << "namespace " << project_name << " {\n";
+
+        for (auto & field : fields)
+        {
+            output_c << '\t' << field.type;
+            if (!field.init.has_value() && field.isArray)
+            {
+                output_c << '*';
+            }
+            output_c << " " << field.name;
+
+            if (field.init.has_value())
+            {
+                if (field.isArray)
+                {
+                    output_c << "[]";
+                }
+                output_c << " = " << field.init.value();
+            }
+
+            output_c << ";\n";
+        }
+
+        output_c << "}\n";
+    }
+
+    if (functions.size())
+    {
+        output_c << '\n';
+
+        output_c << "namespace " << project_name << " {\n";
+
+        for (auto & func : functions)
+        {
+            if (!nonNamespacedFunction.contains(func.name))
+            {
+                output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
+            }
+        }
+
+        output_c << "}\n";
+
+        for (auto & func : functions)
+        {
+            if (nonNamespacedFunction.contains(func.name))
+            {
+                output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
+            }
+        }
+    }
+
+    for (auto & func : functions)
+    {
+        output_c << '\n';
+
+        std::string namespaced;
+        if (!nonNamespacedFunction.contains(func.name))
+        {
+            namespaced = project_name + "::";
+        }
+
+        output_c << getReturnType(func.descriptor) << " " << namespaced << func.name << "(" << generateParameters(func.descriptor) << ")\n{\n";
+
+        int depth = 0;
+        for (auto & inst : func.instructions)
+        {
+            if (inst.opcode == "}") --depth;
+            if (inst.opcode.size())
+            {
+                output_c << std::string(depth + 1, '\t') << inst.opcode << '\n';
+            }
+            if (inst.opcode == "{") ++depth;
+        }
+        output_c << "}\n";
+    }
+
+    output_c.close();
+}
+
+std::vector<Instruction> ClassFile::lineAnalyser(Buffer & buffer, const std::string & name, std::vector<std::tuple<u2, u2>> lineNumbers)
 {
     insts.clear();
     localsTypes.clear();
@@ -155,130 +720,7 @@ std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name,
     return insts;
 }
 
-struct Array
-{
-    size_t size;
-    std::string type;
-    size_t position;
-    std::vector<std::string> populate;
-};
-
-using Value = std::variant<int, long, float, double, std::string, Array>;
-std::vector<Value> stack;
-template<class> inline constexpr bool always_false_v = false;
-
-std::string getAsString(const Value & value)
-{
-    return std::visit([](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-
-        if constexpr (std::is_same_v<T, int>)
-        {
-            return fmt::format("{}", arg);
-        }
-        else if constexpr (std::is_same_v<T, long>)
-        {
-            return fmt::format("{}L", arg);
-        }
-        else if constexpr (std::is_same_v<T, float>)
-        {
-            return fmt::format("{}f", arg);
-        }
-        else if constexpr (std::is_same_v<T, double>)
-        {
-            return fmt::format("{}", arg);
-        }
-        else if constexpr (std::is_same_v<T, std::string>)
-        {
-            return arg;
-        }
-        else if constexpr (std::is_same_v<T, Array>)
-        {
-            std::string output;
-            for (size_t i = 0; i < arg.populate.size(); ++i)
-            {
-                if (i > 0)
-                {
-                    output += ", ";
-                }
-                output += arg.populate[i];
-            }
-
-            return fmt::format("{{ {} }}", output);
-        }
-        else
-        {
-            static_assert(always_false_v<T>, "non-exhaustive visitor!");
-        }
-    }, value);
-}
-
-enum class OpType
-{
-    Store,
-    Cond,
-    Inc,
-    Jump,
-    IndexedStore,
-    Return,
-    Call,
-};
-
-struct Operation
-{
-    OpType type;
-
-    struct
-    {
-        std::optional<std::string> type;
-        std::optional<int> size;
-        u4 position;
-        std::string arr_type;
-        int index;
-        std::optional<std::string> value;
-        std::vector<std::string> populate;
-    } store;
-
-    struct
-    {
-        std::string left;
-        std::string right;
-        u4 absolute;
-        std::string op;
-    } cond;
-
-    struct
-    {
-        int index;
-        int constant;
-    } inc;
-
-    struct
-    {
-        u4 absolute;
-    } jump;
-
-    struct
-    {
-        std::string array;
-        std::string index;
-        std::string value;
-    } istore;
-
-    struct
-    {
-        std::optional<std::string> value;
-    } ret;
-
-    struct
-    {
-        std::string code;
-    } call;
-};
-
-std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & addOpeningParen);
-
-std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position)
+std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position)
 {
     if (sizeof(int) == sizeof(long))
     {
@@ -384,6 +826,21 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                     op.store.value = str;
                     locals[index] = T_STRING;
                 }
+            }
+            else if (std::holds_alternative<Object>(v))
+            {
+                auto obj = std::get<Object>(v);
+                op.store.arr_type = obj.type;
+                if (localType != T_OBJECT)
+                {
+                    op.store.type =  op.store.arr_type;
+                    op.store.value = obj.ctor;
+                    locals[index] = T_OBJECT;
+                }
+            }
+            else
+            {
+                assert(false);
             }
 
             operations.push_back(op);
@@ -725,7 +1182,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
 
             auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
             auto fullName = fmt::format("{}::{}", className, methodName);
-            boost::replace_all(fullName, "/"s, "::"s);
+            fullName = javaToCpp(fullName);
 
             std::string argsString;
             auto argsCount = countArgs(descriptor);
@@ -771,7 +1228,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
 
             auto fullName = fmt::format("{}::{}", className, variableName);
-            boost::replace_all(fullName, "/"s, "::"s);
+            fullName = javaToCpp(fullName);
 
             stack.push_back(fullName);
             break;
@@ -801,7 +1258,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
 
             auto fullName = fmt::format("{}::{}", className, variableName);
-            boost::replace_all(fullName, "/"s, "::"s);
+            fullName = javaToCpp(fullName);
 
             auto val = stack.back();
             stack.pop_back();
@@ -812,7 +1269,14 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
                 {
                     if (f.name == variableName)
                     {
-                        f.init = getAsString(val);
+                        if (std::holds_alternative<Object>(val))
+                        {
+                            f.init = std::get<Object>(val).ctor;
+                        }
+                        else
+                        {
+                            f.init = getAsString(val);
+                        }
                     }
                 }
             }
@@ -940,7 +1404,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             if (methodName == CONSTRUCTOR)
             {
                 fullName = fmt::format("{}", objRef);
-                boost::replace_all(fullName, "/"s, "::"s);
+                fullName = javaToCpp(fullName);
             }
             else
             {
@@ -998,7 +1462,11 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             if (objRef == className)
             {
                 stack.pop_back();
-                stack.push_back(callString);
+
+                Object obj;
+                obj.type = javaToCpp(className);
+                obj.ctor = callString;
+                stack.push_back(obj);
             }
             else
             {
@@ -1032,7 +1500,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto objRef = getAsString(stack[objOffset]);
 
             auto fullName = fmt::format("{}.{}", objRef, methodName);
-            boost::replace_all(fullName, "/"s, "::"s);
+            fullName = javaToCpp(fullName);
 
             std::string argsString;
             if (argsCount && argsCount <= stack.size())
@@ -1123,8 +1591,9 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
         case new_:
         {
             auto index = r16();
-            auto className = getStringFromUtf8(std::get<Class>(constantPool[index]).name_index);
-            stack.push_back(className);
+            Object obj;
+            obj.type = getStringFromUtf8(std::get<Class>(constantPool[index]).name_index);
+            stack.push_back(obj);
             break;
         }
         case idiv:
@@ -1224,7 +1693,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
             auto & c2 = operations[1].cond;
             auto absolute1 = c1.absolute;
             auto absolute2 = c2.absolute;
-            auto isGoto = (*fullBuffer)[absolute1 - 3] == goto_ || (*fullBuffer)[absolute2 - 3] == goto_;
+            //auto isGoto = (*fullBuffer)[absolute1 - 3] == goto_ || (*fullBuffer)[absolute2 - 3] == goto_;
 
             std::string andOrOr;
             if (absolute1 == absolute2)
@@ -1363,7 +1832,7 @@ std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string &
     return lineInsts;
 }
 
-std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & addOpeningParen)
+std::string ClassFile::generateCodeFromOperation(Operation operation, u4 start_pc, bool & addOpeningParen)
 {
     std::string output;
 
@@ -1527,3 +1996,58 @@ std::string generateCodeFromOperation(Operation operation, u4 start_pc, bool & a
 
     return output;
 }
+
+u2 ClassFile::getLineFromOpcode(u2 opcode)
+{
+    u2 lastLineSaw = 0;
+
+    for (size_t i = 0; i < lines->size() - 1; ++i)
+    {
+        auto pc = std::get<0>((*lines)[i]);
+        auto nb = std::get<1>((*lines)[i]);
+        if (lastLineSaw <= nb)
+        {
+            if (opcode <= pc)
+            {
+                return nb;
+            }
+            lastLineSaw = nb;
+        }
+    }
+
+    return std::get<1>((*lines)[lines->size() - 1]);
+}
+
+u2 ClassFile::getOpcodeFromLine(u2 line)
+{
+    for (auto & l : *lines)
+    {
+        if (std::get<1>(l) == line)
+        {
+            return std::get<0>(l);
+        }
+    }
+
+    throw fmt::format("Invalid line given.");
+}
+
+int ClassFile::findLocal(int index)
+{
+    for (auto it = localsTypes.rbegin(); it != localsTypes.rend(); ++it)
+    {
+        if (it->contains(index))
+        {
+            return it->operator [](index);
+        }
+    }
+
+    return T_NONE;
+
+}
+
+std::string ClassFile::getStringFromUtf8(int index)
+{
+    auto b = std::get<Utf8>(constantPool[index]).bytes;
+    return std::string { begin(b), end(b) };
+}
+
