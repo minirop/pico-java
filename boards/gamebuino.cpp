@@ -26,7 +26,7 @@ void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
 
     for (auto & file : files)
     {
-        file.generate(files);
+        file.generate(files, Board::Gamebuino);
     }
 
     std::ofstream output_header("gamebuino-java.h");
@@ -62,7 +62,7 @@ namespace gamebuino {
 
     if (resources.size())
     {
-        std::ofstream output_res_header(RESOURCES_FILE);
+        std::ofstream output_res_header(RESOURCES_FILE + ".h"s);
 
         for (auto & res : resources)
         {
@@ -78,23 +78,7 @@ namespace gamebuino {
         output_res_header.close();
     }
 
-    if (fs::exists(currentPath / RESOURCES_FILE))
-    {
-        fs::copy_file(currentPath / RESOURCES_FILE, fs::current_path() / RESOURCES_FILE, fs::copy_options::overwrite_existing);
-    }
-    else
-    {
-        fs::remove(fs::current_path() / RESOURCES_FILE);
-    }
-
-    if (fs::exists(currentPath / USER_FILE))
-    {
-        fs::copy_file(currentPath / USER_FILE, fs::current_path() / USER_FILE, fs::copy_options::overwrite_existing);
-    }
-    else
-    {
-        fs::remove(fs::current_path() / USER_FILE);
-    }
+    copyUserFiles(currentPath);
 
     fs::current_path(tempPath / project_name);
     system("arduino-cli compile --fqbn gamebuino:samd:gamebuino_meta_native --output-dir build");

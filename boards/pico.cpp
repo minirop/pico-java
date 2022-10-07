@@ -4,14 +4,12 @@
 #include <filesystem>
 #include <fmt/format.h>
 
-namespace fs = std::filesystem;
-
 std::set<std::string> usedFieldNames;
 
 std::string get_cmake_board_name(Board board);
 
 void build_pico(std::string project_name, Board board, std::vector<ClassFile> files)
-{/*
+{
     if (!getenv("PICO_SDK_PATH"))
     {
         fmt::print("$PICO_SDK_PATH is not set nor accessible. Aborting.\n");
@@ -35,65 +33,10 @@ void build_pico(std::string project_name, Board board, std::vector<ClassFile> fi
     fs::create_directories(tempDir + "/build");
     fs::current_path(tempPath / tempDir);
 
-    std::ofstream output_c("main.cpp");
-
-    output_c << "#include \"pico-java.h\"\n";
-
-    if (fields.size() || functions.size() > 1)
+    for (auto & file : files)
     {
-        output_c << "\n" << "namespace " << project_name << "\n{\n";
-        for (auto & field : fields)
-        {
-            output_c << '\t' << field.type << " " << field.name;
-
-            if (field.init.has_value())
-            {
-                output_c << " = " << field.init.value();
-            }
-
-            output_c << ";\n";
-        }
-        for (auto & func : functions)
-        {
-            if (func.name != "main")
-            {
-                output_c << '\t' << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
-            }
-        }
-        output_c << "}\n";
+        file.generate(files, board);
     }
-
-    for (auto & func : functions)
-    {
-        bool isMain = func.name == "main";
-
-        output_c << "\n";
-        if (!isMain)
-        {
-            output_c << "namespace " << project_name << " {\n";
-        }
-
-        output_c << (isMain ? "int" : getReturnType(func.descriptor)) << " " << func.name << "(" << (isMain ? "" : generateParameters(func.descriptor)) << ")\n{\n";
-
-        int depth = 0;
-        for (auto & inst : func.instructions)
-        {
-            if (inst.opcode == "}") --depth;
-            if (inst.opcode.size())
-            {
-                output_c << std::string(depth + 1, '\t') << inst.opcode << '\n';
-            }
-            if (inst.opcode == "{") ++depth;
-        }
-        output_c << "}\n";
-
-        if (!isMain)
-        {
-            output_c << "}\n";
-        }
-    }
-
-    output_c.close();
 
     std::ofstream output_cmake("CMakeLists.txt");
 
@@ -116,7 +59,12 @@ void build_pico(std::string project_name, Board board, std::vector<ClassFile> fi
     }
     output_cmake << fmt::format("project({})\n", project_name)
                  << "pico_sdk_init()\n"
-                 << fmt::format("add_executable({} main.cpp)\n", project_name)
+                 << fmt::format("add_executable({}", project_name);
+    for (auto & file : files)
+    {
+        output_cmake << " " << file.fileName << ".cpp";
+    }
+    output_cmake << ")\n"
                  << fmt::format("pico_add_extra_outputs({})\n", project_name);
     if (board == Board::Badger2040)
     {
@@ -129,13 +77,17 @@ void build_pico(std::string project_name, Board board, std::vector<ClassFile> fi
     std::ofstream output_header("pico-java.h");
 
     output_header << R"___(
+#ifndef PICO_JAVA_H
+#define PICO_JAVA_H
+
 #include "pico/stdlib.h"
+#include <string>
 
 namespace pico
 {
     namespace stdio
     {
-        inline void init_all()
+        inline static void init_all()
         {
             stdio_init_all();
         }
@@ -298,6 +250,12 @@ namespace pimoroni
         {
             badger2040.text(string, x, y, s);
         }
+
+        static inline auto A = badger2040.A;
+        static inline auto B = badger2040.B;
+        static inline auto C = badger2040.C;
+        static inline auto D = badger2040.D;
+        static inline auto E = badger2040.E;
     }
 }
 )___";
@@ -316,12 +274,16 @@ namespace pimoroni
 })___";
     }
 
+    output_header << "#endif\n";
+
     output_header.close();
+
+    copyUserFiles(currentPath);
 
     fs::current_path(tempPath / tempDir / "build");
     system("cmake ..");
     system("make");
-    system(fmt::format("cp {}.uf2 {}", project_name, currentPath.string()).data());*/
+    system(fmt::format("cp {}.uf2 {}", project_name, currentPath.string()).data());
 }
 
 std::string get_cmake_board_name(Board board)

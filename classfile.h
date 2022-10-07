@@ -89,7 +89,7 @@ public:
 
     bool hasBoard() const;
     std::string boardName() const;
-    void generate(const std::vector<ClassFile> & files);
+    void generate(const std::vector<ClassFile> & files, Board board);
 
     std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<std::tuple<u2, u2>> lineNumbers);
     std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position);

@@ -1,5 +1,6 @@
 #include "classfile.h"
 #include "boards/gamebuino.h"
+#include "boost/algorithm/string.hpp"
 #include <fstream>
 
 enum
@@ -114,7 +115,7 @@ std::string getAsString(const Value & value)
         }
         else if constexpr (std::is_same_v<T, float>)
         {
-            return fmt::format("{}f", arg);
+            return fmt::format("{}", arg);
         }
         else if constexpr (std::is_same_v<T, double>)
         {
@@ -353,7 +354,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
         auto name = getStringFromUtf8(name_index);
         auto descriptor = getStringFromUtf8(descriptor_index);
 
-        fields.push_back({ name, getTypeFromDescriptor(descriptor, flags), descriptor[0] == '[' });
+        fields.push_back({ name, getTypeFromDescriptor(descriptor, flags), descriptor[0] == '[', access_flags });
     }
 
     struct MethData
@@ -629,71 +630,125 @@ std::string ClassFile::boardName() const
     return board_name;
 }
 
-void ClassFile::generate(const std::vector<ClassFile> & files)
+void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
 {
-    if (!hasBoard())
+    std::ofstream output_h(fileName + ".h");
+
+    output_h << "#ifndef " << boost::to_upper_copy(fileName) << "_H\n"
+             << "#define " << boost::to_upper_copy(fileName) << "_H\n";
+
+    if (board != Board::Gamebuino)
     {
-        std::ofstream output_h(fileName + ".h");
+        output_h << "#include \"pico-java.h\"\n"
+                 << "#if __has_include(\"" << RESOURCES_FILE << ".h\")\n"
+                 << "#include \"" << RESOURCES_FILE << ".h\"\n"
+                 << "#endif\n"
+                 << "#if __has_include(\"" << USER_FILE << ".h\")\n"
+                 << "#include \"" << USER_FILE << ".h\"\n"
+                 << "#endif\n";
 
-        output_h << "class " << fileName << " {\n"
-                 << "public:\n";
-
-        if (fields.size())
+        for (auto & f : files)
         {
-            output_h << '\n';
-
-            for (auto & field : fields)
-            {
-                output_h << field.type;
-                if (!field.init.has_value() && field.isArray)
-                {
-                    output_h << '*';
-                }
-                output_h << " " << field.name;
-
-                if (field.init.has_value())
-                {
-                    if (field.isArray)
-                    {
-                        output_h << "[]";
-                    }
-
-                    if (field.init.value() != "null")
-                    {
-                        output_h << " = " << field.init.value();
-                    }
-                }
-
-                output_h << ";\n";
-            }
+            if (f.fileName != fileName)
+                output_h << "#include \"" << f.fileName << ".h\"\n";
         }
 
-        for (auto & func : functions)
-        {
-            output_h << '\n';
-
-            if (func.name == CONSTRUCTOR)
-            {
-                output_h << fileName;
-            }
-            else
-            {
-                output_h << getReturnType(func.descriptor) << " " << func.name;
-            }
-            output_h << "(" << generateParameters(func.descriptor, true) << ");\n";
-        }
-
-        output_h << "};\n";
-
-        output_h.close();
+        output_h << '\n';
     }
 
-    std::ofstream output_c(fileName + ".ino");
-
-    if (hasBoard())
+    if (!hasBoard())
     {
-        output_c << "#include \"gamebuino-java.h\"\n"
-                 << "#if __has_include(\"" << RESOURCES_FILE << "\")\n"
+        output_h << "class " << fileName << " {\n"
+                 << "public:\n";
+    }
+
+    if (fields.size())
+    {
+        output_h << '\n';
+
+        for (auto & field : fields)
+        {
+            if (hasBoard())
+            {
+                if ((field.flags & ACC_PUBLIC) == 0) continue;
+
+                output_h << "extern ";
+            }
+
+            output_h << field.type;
+            if (!field.init.has_value() && field.isArray)
+            {
+                output_h << '*';
+            }
+            output_h << " " << field.name;
+
+            if (field.init.has_value())
+            {
+                if (field.isArray)
+                {
+                    output_h << "[]";
+                }
+
+                if (!hasBoard() && field.init.value() != "null")
+                {
+                    output_h << " = " << field.init.value();
+                }
+            }
+
+            output_h << ";\n";
+        }
+    }
+
+    for (auto & func : functions)
+    {
+        output_h << '\n';
+
+        if (func.name == CONSTRUCTOR)
+        {
+            output_h << fileName;
+        }
+        else
+        {
+            output_h << getReturnType(func.descriptor) << " " << func.name;
+        }
+        output_h << "(" << generateParameters(func.descriptor, true) << ");\n";
+    }
+
+    if (!hasBoard())
+    {
+        output_h << "};\n";
+    }
+
+    output_h << "#endif\n";
+
+    output_h.close();
+
+    std::string extension;
+    switch (board)
+    {
+    case Board::Gamebuino:
+        extension = "ino";
+        break;
+    default:
+        extension = "cpp";
+        break;
+    }
+
+    std::ofstream output_c(fileName + "." + extension);
+
+    if (!hasBoard() || board != Board::Gamebuino)
+    {
+        switch (board)
+        {
+        case Board::Gamebuino:
+            output_c << "#include \"gamebuino-java.h\"\n";
+            break;
+        default: // pico boards
+            output_c << "#include \"pico-java.h\"\n";
+            break;
+        }
+
+        output_c << "#if __has_include(\"" << RESOURCES_FILE << "\")\n"
                  << "#include \"" << RESOURCES_FILE << "\"\n"
                  << "#endif\n"
                  << "#if __has_include(\"" << USER_FILE << "\")\n"
@@ -701,7 +756,7 @@ void ClassFile::generate(const std::vector<ClassFile> & files)
                  << "#endif\n";
         for (auto & f : files)
         {
-            if (f.fileName != fileName)
+            if (!f.hasBoard())
             {
                 output_c << "#include \"" << f.fileName << ".h\"\n";
             }
@@ -714,6 +769,8 @@ void ClassFile::generate(const std::vector<ClassFile> & files)
 
         for (auto & field : fields)
         {
+            if ((field.flags & ACC_PUBLIC)) continue;
+
             if (field.init.has_value() && field.init.value() == "null")
             {
                 output_c << "extern ";
@@ -741,12 +798,6 @@ void ClassFile::generate(const std::vector<ClassFile> & files)
 
             output_c << ";\n";
         }
-
-        output_c << '\n';
-        for (auto & func : functions)
-        {
-            output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor, false) << ");\n";
-        }
     }
 
     for (auto & func : functions)
@@ -773,12 +824,12 @@ void ClassFile::generate(const std::vector<ClassFile> & files)
         int depth = 0;
         for (auto & inst : func.instructions)
         {
-            if (inst.opcode == "}") --depth;
+            if (inst.opcode.starts_with("}")) --depth;
             if (inst.opcode.size())
             {
                 output_c << std::string(depth + 1, '\t') << inst.opcode << '\n';
             }
-            if (inst.opcode == "{") ++depth;
+            if (inst.opcode.starts_with("{")) ++depth;
         }
         output_c << "}\n";
     }
@@ -931,10 +982,10 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             {
                 auto str = std::get<std::string>(v);
                 op.store.arr_type = "std::string";
+                op.store.value = str;
                 if (localType != T_STRING)
                 {
                     op.store.type =  op.store.arr_type;
-                    op.store.value = str;
                     locals[index] = T_STRING;
                 }
             }
@@ -1129,6 +1180,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             op.cond.absolute = absolute;
 
             operations.push_back(op);
+
+            if ((*fullBuffer)[absolute - 3] == goto_)
+            {
+                skippedGotos.insert(absolute - 3);
+            }
             break;
         }
         case iinc:
@@ -1145,6 +1201,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             auto correction = buffer_size - buffer.size() - 1;
             auto offset = s16();
             auto absolute = start_pc + correction + offset;
+
+            if (skippedGotos.contains(start_pc + correction))
+            {
+                break;
+            }
 
             Operation op;
             op.type = OpType::Jump;
@@ -1244,6 +1305,21 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             {
                 op.ret.value = "0";
             }
+            operations.push_back(op);
+            break;
+        }
+        case ireturn:
+        case lreturn:
+        case freturn:
+        case dreturn:
+        case areturn:
+        {
+            auto val = stack.back();
+            stack.pop_back();
+
+            Operation op;
+            op.type = OpType::Return;
+            op.ret.value = getAsString(val);
             operations.push_back(op);
             break;
         }
@@ -1448,7 +1524,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             else if (std::holds_alternative<float>(constant))
             {
                 auto f = std::get<float>(constant);
-                stack.push_back(fmt::format("{}f", f));
+                stack.push_back(fmt::format("{}", f));
             }
             else if (std::holds_alternative<double>(constant))
             {
@@ -1723,6 +1799,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             op.cond.absolute = absolute;
 
             operations.push_back(op);
+
+            if ((*fullBuffer)[absolute - 3] == goto_)
+            {
+                skippedGotos.insert(absolute - 3);
+            }
             break;
         }
         case new_:
@@ -1833,6 +1914,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
     }
 
     bool addOpeningParen = false;
+    bool parsed = false;
     switch (operations.size())
     {
     case 0: // <(cl)init>
@@ -1840,21 +1922,8 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
         {
             assert(false);
         }
+        parsed = true;
         break;
-    case 1:
-    case 3:
-    {
-        auto op = operations[0];
-        inst.opcode = generateCodeFromOperation(op, start_pc, addOpeningParen);
-
-        for (size_t size = 1; size < operations.size(); ++size)
-        {
-            Instruction tmp;
-            tmp.opcode = generateCodeFromOperation(operations[size], start_pc, addOpeningParen);
-            lineInsts.push_back(tmp);
-        }
-        break;
-    }
     case 2:
     {
         const auto & o1 = operations[0];
@@ -1867,6 +1936,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             if (o2.jump.absolute > start_pc)
             {
                 Instruction tmp;
+                tmp.position = position;
                 tmp.opcode = generateCodeFromOperation(o2, start_pc, addOpeningParen); //???
                 lineInsts.push_back(tmp);
             }
@@ -1879,6 +1949,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
                     if (jumpLine <= insts[idx].position)
                     {
                         Instruction tmp;
+                        tmp.position = position;
                         tmp.opcode = "while (true)";
                         insts.insert(insts.begin() + idx, tmp);
                         tmp.opcode = "{";
@@ -1891,6 +1962,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
                 if (append)
                 {
                     Instruction tmp;
+                    tmp.position = position;
                     tmp.opcode = "while (true)";
                     insts.push_back(tmp);
                     tmp.opcode = "{";
@@ -1898,9 +1970,12 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
                 }
 
                 Instruction tmp;
+                tmp.position = position;
                 tmp.opcode = "}";
                 lineInsts.push_back(tmp);
             }
+
+            parsed = true;
         }
         else if (o1.type == OpType::Cond && o2.type == OpType::Cond)
         {
@@ -1929,14 +2004,8 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
                                       c2.left, c2.op, c2.right);
             addOpeningParen = true;
             closingBrackets.insert(getLineFromOpcode(absolute2));
-        }
-        else
-        {
-            inst.opcode = generateCodeFromOperation(operations[0], start_pc, addOpeningParen);
 
-            Instruction tmp;
-            tmp.opcode = generateCodeFromOperation(operations[1], start_pc, addOpeningParen);
-            lineInsts.push_back(tmp);
+            parsed = true;
         }
         break;
     }
@@ -1971,29 +2040,36 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
 
             closingBrackets.insert(getLineFromOpcode(o2.cond.absolute));
             addOpeningParen = true;
-        }
-        else
-        {
-            inst.opcode = generateCodeFromOperation(operations[0], start_pc, addOpeningParen);
 
-            for (size_t i = 1; i < operations.size(); ++i)
-            {
-                Instruction tmp;
-                tmp.opcode = generateCodeFromOperation(operations[i], start_pc, addOpeningParen);
-                tmp.position = position;
-                lineInsts.push_back(tmp);
-            }
+            parsed = true;
         }
         break;
     }
-    case 5:
-    {
-        //break;
     }
-    default:
+
+    if (!parsed)
     {
-        throw fmt::format("Operation matcher does not handle groups of {} operation.", operations.size());
-    }
+        auto op = operations[0];
+        inst.opcode = generateCodeFromOperation(op, start_pc, addOpeningParen);
+
+        for (size_t size = 1; size < operations.size(); ++size)
+        {
+            if (operations[size-1].type == OpType::Cond)
+            {
+                Instruction openingBracket;
+                openingBracket.position = position;
+                openingBracket.opcode = "{";
+                lineInsts.push_back(openingBracket);
+
+                localsTypes.push_back({});
+                addOpeningParen = false;
+            }
+
+            Instruction tmp;
+            tmp.position = position;
+            tmp.opcode = generateCodeFromOperation(operations[size], start_pc, addOpeningParen);
+            lineInsts.push_back(tmp);
+        }
     }
 
     for (auto it = begin(elseStmts); it != end(elseStmts);)
@@ -2001,6 +2077,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
         if (*it <= position)
         {
             Instruction elseStmt;
+            elseStmt.position = position;
             elseStmt.opcode = "{";
             lineInsts.insert(begin(lineInsts), elseStmt);
             elseStmt.opcode = "else";
@@ -2023,6 +2100,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
         if (*it <= position)
         {
             Instruction closingBracket;
+            closingBracket.position = position;
             closingBracket.opcode = "}";
             lineInsts.insert(begin(lineInsts), closingBracket);
             it = closingBrackets.erase(it);
@@ -2038,6 +2116,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
     if (addOpeningParen)
     {
         Instruction openingBracket;
+        openingBracket.position = position;
         openingBracket.opcode = "{";
         lineInsts.push_back(openingBracket);
 
@@ -2265,4 +2344,3 @@ std::string ClassFile::getStringFromUtf8(int index)
     auto b = std::get<Utf8>(constantPool[index]).bytes;
     return std::string { begin(b), end(b) };
 }
-

@@ -42,8 +42,6 @@ u4 countArgs(std::string str)
 attribute_info readAttribute(Buffer & buffer);
 
 std::vector<Instruction> convertBytecode(Buffer & buffer, std::string function, u2 depth);
-void initializeFields(Buffer & buffer);
-Board getBoardTypeFromString(std::string board_name);
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
 {
@@ -160,9 +158,19 @@ std::string getReturnType(std::string descriptor)
         return "bool";
     }
 
-    if (type  == "I")
+    if (type == "I")
     {
         return "int";
+    }
+
+    if (type.starts_with("L") && type.ends_with(";"))
+    {
+        auto jt = type.substr(1, type.size() - 2);
+
+        if (jt == "java/lang/String")
+        {
+            return "std::string";
+        }
     }
 
     throw fmt::format("Invalid or unhandled type used as a return type: '{}'.", type);
@@ -201,9 +209,25 @@ std::string generateParameters(std::string descriptor, bool isMethod)
             index = descriptor.size();
             break;
         case 'L':
-            while (descriptor[index] != ';') ++index;
-            throw fmt::format("classes are not supported as function arguments.");
+        {
+            std::string type;
+            ++index;
+            while (descriptor[index] != ';')
+            {
+                type += descriptor[index];
+                ++index;
+            }
+
+            if (type == "java/lang/String")
+            {
+                ret += fmt::format(", std::string {}local_{}", std::string(arrayCount, '*'), count);
+            }
+            else
+            {
+                throw fmt::format("classes are not supported as function arguments.");
+            }
             break;
+        }
         case 'I':
         case 'Z':
             ret += fmt::format(", int {}local_{}", std::string(arrayCount, '*'), count);
@@ -228,4 +252,28 @@ std::string generateParameters(std::string descriptor, bool isMethod)
 std::string javaToCpp(std::string name)
 {
     return boost::replace_all_copy(name, "/"s, "::"s);
+}
+
+void copyUserFiles(fs::path currentPath)
+{
+    for (auto ext : { ".h"s, ".cpp"s })
+    {
+        if (fs::exists(currentPath / (RESOURCES_FILE + ext)))
+        {
+            fs::copy_file(currentPath / (RESOURCES_FILE + ext), fs::current_path() / (RESOURCES_FILE + ext), fs::copy_options::overwrite_existing);
+        }
+        else
+        {
+            fs::remove(fs::current_path() / (RESOURCES_FILE + ext));
+        }
+
+        if (fs::exists(currentPath / (USER_FILE + ext)))
+        {
+            fs::copy_file(currentPath / (USER_FILE + ext), fs::current_path() / (USER_FILE + ext), fs::copy_options::overwrite_existing);
+        }
+        else
+        {
+            fs::remove(fs::current_path() / (USER_FILE + ext));
+        }
+    }
 }

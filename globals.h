@@ -46,7 +46,8 @@ struct FieldData
 {
     std::string name;
     std::string type;
-    bool isArray = false;
+    bool isArray;
+    u2 flags;
     std::optional<std::string> init = {};
 };
 
@@ -147,6 +148,11 @@ enum
     if_acmpeq = 0xa5,
     if_acmpne = 0xa6,
     goto_ = 0xa7,
+    ireturn = 0xac,
+    lreturn = 0xad,
+    freturn = 0xae,
+    dreturn = 0xaf,
+    areturn = 0xb0,
     return_ = 0xb1,
     getstatic = 0xb2,
     putstatic = 0xb3,
@@ -310,6 +316,8 @@ using ConstantPool = std::vector<Constant>;
 u4 countArgs(std::string str);
 std::string getReturnType(std::string descriptor);
 std::string generateParameters(std::string descriptor, bool isMethod);
+Board getBoardTypeFromString(std::string board_name);
+void copyUserFiles(std::filesystem::path currentPath);
 
 #define STATIC_INIT "<clinit>"
 #define CONSTRUCTOR "<init>"
@@ -321,12 +329,13 @@ enum class Format
 };
 
 std::string javaToCpp(std::string name);
-constexpr const char* RESOURCES_FILE = "resources.h";
-constexpr const char* USER_FILE = "userdata.h";
+constexpr const char* RESOURCES_FILE = "resources";
+constexpr const char* USER_FILE = "userdata";
 
 constexpr u1 UNSIGNED_TYPE = 0x01;
 constexpr u1 CONST_TYPE = 0x02;
 
+constexpr u1 ACC_PUBLIC = 0x0001;
 constexpr u1 ACC_FINAL = 0x0010;
 
 constexpr auto OBJ_INSTANCE = "local_0";
