@@ -85,11 +85,11 @@ using Value = std::variant<int, long, float, double, std::string, Array, Object>
 class ClassFile
 {
 public:
-    ClassFile(std::string filename);
+    ClassFile(std::string filename, std::string projectName, bool partial = false);
 
     bool hasBoard() const;
     std::string boardName() const;
-    void generate(std::string project_name);
+    void generate(const std::vector<ClassFile> & files);
 
     std::vector<Instruction> lineAnalyser(Buffer & buffer, const std::string & name, std::vector<std::tuple<u2, u2>> lineNumbers);
     std::vector<Instruction> decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position);
@@ -113,6 +113,7 @@ public:
     std::string fileName;
     Buffer * fullBuffer = nullptr;
     std::vector<std::tuple<u2, u2>> * lines = nullptr;
+    std::string project_name;
 };
 
 #endif // CLASSFILE_H

@@ -26,6 +26,9 @@ using s2 = int16_t;
 using s4 = int32_t;
 using s8 = int64_t;
 
+namespace fs = std::filesystem;
+using namespace std::string_literals;
+
 struct Instruction
 {
     u4 position;
@@ -49,6 +52,8 @@ struct FieldData
 
 enum
 {
+    aconst_null = 0x01,
+    iconst_m1 = 0x02,
     iconst_0 = 0x03,
     iconst_1 = 0x04,
     iconst_2 = 0x05,
@@ -121,6 +126,7 @@ enum
     dmul = 0x6b,
     idiv = 0x6c,
     irem = 0x70,
+    ineg = 0x74,
     ishl = 0x78,
     iand = 0x7e,
     iinc = 0x84,
@@ -144,6 +150,8 @@ enum
     return_ = 0xb1,
     getstatic = 0xb2,
     putstatic = 0xb3,
+    getfield = 0xb4,
+    putfield = 0xb5,
     invokevirtual = 0xb6,
     invokespecial = 0xb7,
     invokestatic = 0xb8,
@@ -301,7 +309,7 @@ using ConstantPool = std::vector<Constant>;
 
 u4 countArgs(std::string str);
 std::string getReturnType(std::string descriptor);
-std::string generateParameters(std::string descriptor);
+std::string generateParameters(std::string descriptor, bool isMethod);
 
 #define STATIC_INIT "<clinit>"
 #define CONSTRUCTOR "<init>"
@@ -313,5 +321,14 @@ enum class Format
 };
 
 std::string javaToCpp(std::string name);
+constexpr const char* RESOURCES_FILE = "resources.h";
+constexpr const char* USER_FILE = "userdata.h";
+
+constexpr u1 UNSIGNED_TYPE = 0x01;
+constexpr u1 CONST_TYPE = 0x02;
+
+constexpr u1 ACC_FINAL = 0x0010;
+
+constexpr auto OBJ_INSTANCE = "local_0";
 
 #endif // GLOBALS_H

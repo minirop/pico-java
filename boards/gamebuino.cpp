@@ -1,9 +1,6 @@
 #include "gamebuino.h"
 #include <fmt/format.h>
 
-namespace fs = std::filesystem;
-using namespace std::string_literals;
-
 struct Resource
 {
     std::string filename;
@@ -29,7 +26,7 @@ void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
 
     for (auto & file : files)
     {
-        file.generate(project_name);
+        file.generate(files);
     }
 
     std::ofstream output_header("gamebuino-java.h");
@@ -45,6 +42,7 @@ namespace gamebuino {
 
         inline auto & display = ::gb.display;
         inline auto & buttons = ::gb.buttons;
+        inline auto & frameCount = ::gb.frameCount;
     }
 
     namespace Button {
@@ -64,7 +62,7 @@ namespace gamebuino {
 
     if (resources.size())
     {
-        std::ofstream output_res_header("resources.ino");
+        std::ofstream output_res_header(RESOURCES_FILE);
 
         for (auto & res : resources)
         {
@@ -80,13 +78,22 @@ namespace gamebuino {
         output_res_header.close();
     }
 
-    if (fs::exists(currentPath / "userdata.ino"))
+    if (fs::exists(currentPath / RESOURCES_FILE))
     {
-        fs::copy_file(currentPath / "userdata.ino", fs::current_path() / "userdata.ino", fs::copy_options::overwrite_existing);
+        fs::copy_file(currentPath / RESOURCES_FILE, fs::current_path() / RESOURCES_FILE, fs::copy_options::overwrite_existing);
     }
     else
     {
-        fs::remove(fs::current_path() / "userdata.ino");
+        fs::remove(fs::current_path() / RESOURCES_FILE);
+    }
+
+    if (fs::exists(currentPath / USER_FILE))
+    {
+        fs::copy_file(currentPath / USER_FILE, fs::current_path() / USER_FILE, fs::copy_options::overwrite_existing);
+    }
+    else
+    {
+        fs::remove(fs::current_path() / USER_FILE);
     }
 
     fs::current_path(tempPath / project_name);

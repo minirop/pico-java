@@ -2,9 +2,6 @@
 #include "boards/gamebuino.h"
 #include <fstream>
 
-namespace fs = std::filesystem;
-using namespace std::string_literals;
-
 enum
 {
     T_NONE    = 0,
@@ -54,7 +51,7 @@ attribute_info readAttribute(Buffer & buffer)
     return info;
 }
 
-std::string getTypeFromDescriptor(std::string descriptor)
+std::string getTypeFromDescriptor(std::string descriptor, u8 flags)
 {
     int count = 0;
     while (descriptor.size() && descriptor.front() == '[')
@@ -63,19 +60,38 @@ std::string getTypeFromDescriptor(std::string descriptor)
         ++count;
     }
 
+    std::string prefix;
+    if (flags & CONST_TYPE) prefix += "const ";
+    if (flags & UNSIGNED_TYPE) prefix += "u";
+
     if (descriptor == "I")
     {
-        return "int";
+        return prefix + "int32_t";
     }
 
     if (descriptor == "B")
     {
-        return "uint8_t";
+        return prefix + "int8_t";
     }
 
-    if (descriptor == "Lgamebuino/Image;")
+    if (descriptor == "S")
     {
-        return "Image";
+        return prefix + "int16_t";
+    }
+
+    if (descriptor == "Z")
+    {
+        return "bool";
+    }
+
+    if (descriptor.starts_with("L") && descriptor.ends_with(";"))
+    {
+        auto jt = descriptor.substr(1, descriptor.size() - 2);
+        if (jt.starts_with("types/"))
+        {
+            return jt.substr(6) + "_t";
+        }
+        return javaToCpp(jt);
     }
 
     throw fmt::format("Invalid type used as a static field: '{}'.", descriptor);
@@ -145,12 +161,10 @@ std::string invertBinaryOperator(std::string binop)
     assert(false);
 }
 
-static std::set<std::string> nonNamespacedFunction = {
-    "loop"s, "setup"s, "main"s,
-};
-
-ClassFile::ClassFile(std::string filename)
+ClassFile::ClassFile(std::string filename, std::string projectName, bool partial)
 {
+    project_name = projectName;
+
     fileName = filename.substr(0, filename.find('.'));
     std::ifstream file(fileName + ".class", std::ios::binary);
 
@@ -306,18 +320,40 @@ ClassFile::ClassFile(std::string filename)
         auto descriptor_index = r16();
         auto attributes_count = r16();
 
-        if (attributes_count != 0)
+        u8 flags = 0;
+
+        if (access_flags & ACC_FINAL)
         {
-            throw fmt::format("Attributes on fields not handled.");
+            flags += CONST_TYPE;
         }
 
-        if ((access_flags & 0x0008) > 0)
+        for (u2 i = 0; i < attributes_count; ++i)
         {
-            auto name = getStringFromUtf8(name_index);
-            auto descriptor = getStringFromUtf8(descriptor_index);
+            auto attr = readAttribute(buffer);
+            auto attribute_name = getStringFromUtf8(attr.attribute_name_index);
+            if (attribute_name == "RuntimeInvisibleAnnotations")
+            {
+                auto buffer = attr.info;
 
-            fields.push_back({ name, getTypeFromDescriptor(descriptor), descriptor[0] == '[' });
+                auto num_annotations = r16();
+                for (u2 ii = 0; ii < num_annotations; ++ii)
+                {
+                    auto type_index = r16();
+                    auto type_name = getStringFromUtf8(type_index);
+                    [[maybe_unused]] auto num_element_value_pairs = r16();
+
+                    if (type_name == "Ltypes/unsigned;")
+                    {
+                        flags += UNSIGNED_TYPE;
+                    }
+                }
+            }
         }
+
+        auto name = getStringFromUtf8(name_index);
+        auto descriptor = getStringFromUtf8(descriptor_index);
+
+        fields.push_back({ name, getTypeFromDescriptor(descriptor, flags), descriptor[0] == '[' });
     }
 
     struct MethData
@@ -332,7 +368,7 @@ ClassFile::ClassFile(std::string filename)
     auto methods_count = r16();
     for (int i = 0; i < methods_count; ++i)
     {
-        auto access_flags = r16();
+        [[maybe_unused]] auto access_flags = r16();
         auto name_index = r16();
         auto descriptor_index = r16();
         auto attributes_count = r16();
@@ -343,26 +379,23 @@ ClassFile::ClassFile(std::string filename)
             attributes.push_back(readAttribute(buffer));
         }
 
-        if (access_flags & 0x0008)
+        auto name = getStringFromUtf8(name_index);
+        auto descriptor = getStringFromUtf8(descriptor_index);
+
+        for (auto & attr : attributes)
         {
-            auto name = getStringFromUtf8(name_index);
-            auto descriptor = getStringFromUtf8(descriptor_index);
+            auto attribute_name = getStringFromUtf8(attr.attribute_name_index);
 
-            for (auto & attr : attributes)
+            if (attribute_name == "Code")
             {
-                auto attribute_name = getStringFromUtf8(attr.attribute_name_index);
-
-                if (attribute_name == "Code")
-                {
-                    methodsToDecompile.push_back({ name, descriptor, attr.info });
-                }
-                else if (attribute_name == "LineNumberTable")
-                {
-                }
-                else
-                {
-                    throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
-                }
+                methodsToDecompile.push_back({ name, descriptor, attr.info });
+            }
+            else if (attribute_name == "LineNumberTable")
+            {
+            }
+            else
+            {
+                throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
             }
         }
     }
@@ -391,13 +424,14 @@ ClassFile::ClassFile(std::string filename)
 
                     // value: element_value
                     auto tag = r8();
-                    if (tag != 'e')
-                    {
-                        throw fmt::format("Annotation '@Board' must contains an enumeration.");
-                    }
 
                     if (type_name == "Lboard/Board;" && element_name == "value")
                     {
+                        if (tag != 'e')
+                        {
+                            throw fmt::format("Annotation '@Board' must contains an enumeration.");
+                        }
+
                         auto type_name_index = r16();
                         auto type_name = getStringFromUtf8(type_name_index);
                         auto const_name_index = r16();
@@ -507,6 +541,11 @@ ClassFile::ClassFile(std::string filename)
         }
     }
 
+    if (partial)
+    {
+        return;
+    }
+
     for (auto & meth : methodsToDecompile)
     {
         auto name = meth.name;
@@ -566,12 +605,16 @@ ClassFile::ClassFile(std::string filename)
         }
         else
         {
-            FunctionData funData;
-            funData.name = name;
-            funData.descriptor = descriptor;
-            funData.instructions = lineAnalyser(code, name, lineNumbers);
+            auto skip = hasBoard() && name == CONSTRUCTOR;
+            if (!skip)
+            {
+                FunctionData funData;
+                funData.name = name;
+                funData.descriptor = descriptor;
+                funData.instructions = lineAnalyser(code, name, lineNumbers);
 
-            functions.push_back(funData);
+                functions.push_back(funData);
+            }
         }
     }
 }
@@ -586,21 +629,97 @@ std::string ClassFile::boardName() const
     return board_name;
 }
 
-void ClassFile::generate(std::string project_name)
+void ClassFile::generate(const std::vector<ClassFile> & files)
 {
+    if (!hasBoard())
+    {
+        std::ofstream output_h(fileName + ".h");
+
+        output_h << "class " << fileName << " {\n"
+                 << "public:\n";
+
+        if (fields.size())
+        {
+            output_h << '\n';
+
+            for (auto & field : fields)
+            {
+                output_h << field.type;
+                if (!field.init.has_value() && field.isArray)
+                {
+                    output_h << '*';
+                }
+                output_h << " " << field.name;
+
+                if (field.init.has_value())
+                {
+                    if (field.isArray)
+                    {
+                        output_h << "[]";
+                    }
+
+                    if (field.init.value() != "null")
+                    {
+                        output_h << " = " << field.init.value();
+                    }
+                }
+
+                output_h << ";\n";
+            }
+        }
+
+        for (auto & func : functions)
+        {
+            output_h << '\n';
+
+            if (func.name == CONSTRUCTOR)
+            {
+                output_h << fileName;
+            }
+            else
+            {
+                output_h << getReturnType(func.descriptor) << " " << func.name;
+            }
+            output_h << "(" << generateParameters(func.descriptor, true) << ");\n";
+        }
+
+        output_h << "};\n";
+
+        output_h.close();
+    }
+
     std::ofstream output_c(fileName + ".ino");
 
-    output_c << "#include \"gamebuino-java.h\"\n";
+    if (hasBoard())
+    {
+        output_c << "#include \"gamebuino-java.h\"\n"
+                 << "#if __has_include(\"" << RESOURCES_FILE << "\")\n"
+                 << "#include \"" << RESOURCES_FILE << "\"\n"
+                 << "#endif\n"
+                 << "#if __has_include(\"" << USER_FILE << "\")\n"
+                 << "#include \"" << USER_FILE << "\"\n"
+                 << "#endif\n";
+        for (auto & f : files)
+        {
+            if (f.fileName != fileName)
+            {
+                output_c << "#include \"" << f.fileName << ".h\"\n";
+            }
+        }
+    }
 
-    if (fields.size())
+    if (hasBoard())
     {
         output_c << '\n';
 
-        output_c << "namespace " << project_name << " {\n";
-
         for (auto & field : fields)
         {
-            output_c << '\t' << field.type;
+            if (field.init.has_value() && field.init.value() == "null")
+            {
+                output_c << "extern ";
+            }
+
+            output_c << field.type;
             if (!field.init.has_value() && field.isArray)
             {
                 output_c << '*';
@@ -613,37 +732,20 @@ void ClassFile::generate(std::string project_name)
                 {
                     output_c << "[]";
                 }
-                output_c << " = " << field.init.value();
+
+                if (field.init.value() != "null")
+                {
+                    output_c << " = " << field.init.value();
+                }
             }
 
             output_c << ";\n";
         }
 
-        output_c << "}\n";
-    }
-
-    if (functions.size())
-    {
         output_c << '\n';
-
-        output_c << "namespace " << project_name << " {\n";
-
         for (auto & func : functions)
         {
-            if (!nonNamespacedFunction.contains(func.name))
-            {
-                output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
-            }
-        }
-
-        output_c << "}\n";
-
-        for (auto & func : functions)
-        {
-            if (nonNamespacedFunction.contains(func.name))
-            {
-                output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor) << ");\n";
-            }
+            output_c << getReturnType(func.descriptor) << " " << func.name << "(" << generateParameters(func.descriptor, false) << ");\n";
         }
     }
 
@@ -651,13 +753,22 @@ void ClassFile::generate(std::string project_name)
     {
         output_c << '\n';
 
-        std::string namespaced;
-        if (!nonNamespacedFunction.contains(func.name))
+        std::string classNameSpace;
+
+        if (!hasBoard())
         {
-            namespaced = project_name + "::";
+            classNameSpace = fileName + "::";
         }
 
-        output_c << getReturnType(func.descriptor) << " " << namespaced << func.name << "(" << generateParameters(func.descriptor) << ")\n{\n";
+        if (func.name == CONSTRUCTOR)
+        {
+            output_c << classNameSpace << fileName;
+        }
+        else
+        {
+            output_c << getReturnType(func.descriptor) << " " << classNameSpace << func.name;
+        }
+        output_c << "(" << generateParameters(func.descriptor, !hasBoard()) << ")\n{\n";
 
         int depth = 0;
         for (auto & inst : func.instructions)
@@ -1181,7 +1292,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
 
 
             auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
-            auto fullName = fmt::format("{}::{}", className, methodName);
+            auto fullName = methodName;
+            if (className != project_name)
+            {
+                fullName = fmt::format("{}::{}", className, fullName);
+            }
             fullName = javaToCpp(fullName);
 
             std::string argsString;
@@ -1227,7 +1342,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
             auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
 
-            auto fullName = fmt::format("{}::{}", className, variableName);
+            auto fullName = variableName;
+            if (className != project_name)
+            {
+                fullName = fmt::format("{}::{}", className, fullName);
+            }
             fullName = javaToCpp(fullName);
 
             stack.push_back(fullName);
@@ -1400,6 +1519,14 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             auto objOffset = stack.size() - argsCount - 1;
             auto objRef = getAsString(stack[objOffset]);
 
+            if (!hasBoard() && objRef == OBJ_INSTANCE)
+            {
+                // remove "this"
+                stack.pop_back();
+
+                break;
+            }
+
             std::string fullName;
             if (methodName == CONSTRUCTOR)
             {
@@ -1428,6 +1555,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
                         argsString = ", " + encode_filename(filename);
                     }
                     else if (descriptor == "([B)V")
+                    {
+                        auto array = std::get<std::string>(stack[offset]);
+                        argsString = ", " + array;
+                    }
+                    else if (descriptor == "([S)V")
                     {
                         auto array = std::get<std::string>(stack[offset]);
                         argsString = ", " + array;
@@ -1499,7 +1631,12 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             auto objOffset = stack.size() - argsCount - 1;
             auto objRef = getAsString(stack[objOffset]);
 
-            auto fullName = fmt::format("{}.{}", objRef, methodName);
+            auto fullName = methodName;
+            std::string ths = getAsString(objRef);
+            if (hasBoard() || ths != OBJ_INSTANCE)
+            {
+                fullName = fmt::format("{}.{}", objRef, fullName);
+            }
             fullName = javaToCpp(fullName);
 
             std::string argsString;
@@ -1616,6 +1753,80 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             stack.push_back(fmt::format("({} - {})", getAsString(left), getAsString(right)));
             break;
         }
+        case getfield:
+        {
+            auto index = r16();
+            auto objRef = stack.back();
+            stack.pop_back();
+
+            auto field = std::get<Fieldref>(constantPool[index]);
+            auto fieldName = getStringFromUtf8(std::get<NameAndType>(constantPool[field.name_and_type_index]).name_index);
+
+            std::string ths = getAsString(objRef);
+            if (!hasBoard() && ths == OBJ_INSTANCE)
+            {
+                stack.push_back(fmt::format("{}", fieldName));
+            }
+            else
+            {
+                stack.push_back(fmt::format("{}.{}", ths, fieldName));
+            }
+            break;
+        }
+        case putfield:
+        {
+            auto index = r16();
+            auto value = stack.back();
+            stack.pop_back();
+            auto objRef = stack.back();
+            stack.pop_back();
+
+            auto field = std::get<Fieldref>(constantPool[index]);
+            auto fieldName = getStringFromUtf8(std::get<NameAndType>(constantPool[field.name_and_type_index]).name_index);
+
+            Operation op;
+            op.type = OpType::Call;
+
+            std::string ths = getAsString(objRef);
+            if (!hasBoard() && ths == OBJ_INSTANCE)
+            {
+                op.call.code = fmt::format("{} = {};", fieldName, getAsString(value));
+            }
+            else
+            {
+                op.call.code = fmt::format("{}.{} = {};", ths, fieldName, getAsString(value));
+            }
+
+            operations.push_back(op);
+            break;
+        }
+        case ineg:
+        {
+            auto value = stack.back();
+            stack.pop_back();
+            stack.push_back(fmt::format("-{}", getAsString(value)));
+            break;
+        }
+        case iconst_m1:
+        {
+            stack.push_back(-1);
+            break;
+        }
+        case iand:
+        {
+            auto right = stack.back();
+            stack.pop_back();
+            auto left = stack.back();
+            stack.pop_back();
+
+            stack.push_back(fmt::format("({} & {})", getAsString(left), getAsString(right)));
+            break;
+        }
+        case aconst_null:
+        {
+            stack.push_back("null");
+            break;
+        }
         default:
             throw fmt::format("Unhandled opcode: '{:x}'.", opcode);
         }
@@ -1624,7 +1835,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
     bool addOpeningParen = false;
     switch (operations.size())
     {
-    case 0: // ???
+    case 0: // <(cl)init>
+        if (name.front() != '<')
+        {
+            assert(false);
+        }
         break;
     case 1:
     case 3:

@@ -3,8 +3,6 @@
 #include "boards/gamebuino.h"
 #include <bit>
 
-using namespace std::string_literals;
-
 u4 countArgs(std::string str)
 {
     int count = 0;
@@ -28,6 +26,7 @@ u4 countArgs(std::string str)
         case 'Z':
         case 'F':
         case 'B':
+        case 'S':
             ++count;
             break;
         case '[':
@@ -46,7 +45,7 @@ std::vector<Instruction> convertBytecode(Buffer & buffer, std::string function, 
 void initializeFields(Buffer & buffer);
 Board getBoardTypeFromString(std::string board_name);
 
-int main(int argc, char** argv)
+int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
 {
     std::vector<std::string> javaFiles;
     for (auto const& dir_entry : std::filesystem::directory_iterator{"."})
@@ -79,16 +78,20 @@ int main(int argc, char** argv)
     }
 
     std::string project_name, board_name;
+    for (auto & file : javaFiles)
+    {
+        ClassFile tmp(file, ""s, true);
+        if (tmp.hasBoard())
+        {
+            project_name = tmp.fileName;
+            board_name = tmp.boardName();
+        }
+    }
+
     std::vector<ClassFile> classFiles;
     for (auto & file : javaFiles)
     {
-        classFiles.push_back(ClassFile(file));
-        if (classFiles.back().hasBoard())
-        {
-            project_name = classFiles.back().fileName;
-            board_name = classFiles.back().boardName();
-            break;
-        }
+        classFiles.push_back(ClassFile(file, project_name));
     }
 
     auto board = getBoardTypeFromString(board_name);
@@ -179,11 +182,11 @@ Board getBoardTypeFromString(std::string board_name)
     throw fmt::format("Invalid board: '{}'.", board_name);
 }
 
-std::string generateParameters(std::string descriptor)
+std::string generateParameters(std::string descriptor, bool isMethod)
 {
     std::string ret;
 
-    int count = 0;
+    int count = isMethod ? 1 : 0;
     if (descriptor[0] != '(')
     {
         throw fmt::format("Invalid descriptor. Should start with '(', got '{}'!", descriptor[0]);
