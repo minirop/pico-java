@@ -19,11 +19,13 @@ void encode_file(std::ofstream & stream, Resource res);
 
 void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
 {
+#ifndef _WIN64
     if (system("which arduino-cli >/dev/null 2>&1") != 0)
     {
         fmt::print("Could not find 'arduino-cli'.");
         return;
     }
+#endif
 
     auto tempPath = fs::temp_directory_path();
 
@@ -113,15 +115,39 @@ namespace gamebuino {
 
     copyUserFiles(currentPath);
 
-    fs::current_path(tempPath / project_name);
-    auto ret = system("arduino-cli compile --fqbn gamebuino:samd:gamebuino_meta_native --output-dir build >/dev/null 2>&1");
+    auto ret = system(
+                "arduino-cli"
+            #ifdef _WIN64
+                ".exe"
+            #endif
+                " compile --fqbn gamebuino:samd:gamebuino_meta_native --output-dir build"
+            #ifndef _WIN64
+                " >/dev/null 2>&1"
+            #endif
+                );
     if (ret != 0)
     {
         fmt::print("Error during the generation of the .bin file!");
         return;
     }
 
-    ret = system(fmt::format("cp build/{0}.ino.bin {1}/{0}.bin >/dev/null 2>&1", project_name, currentPath.string()).data());
+    ret = system(fmt::format(
+                 #ifdef _WIN64
+                     "copy"
+                 #else
+                     "cp"
+                 #endif
+                     " build{2}{0}.ino.bin {1}{2}{0}.bin"
+                 #ifndef _WIN64
+                     " >/dev/null 2>&1"
+                 #endif
+                     , project_name, currentPath.string(),
+                 #ifdef _WIN64
+                     "\\"
+                 #else
+                     "/"
+                 #endif
+                     ).data());
     if (ret == 0)
     {
         fmt::print("Success!");

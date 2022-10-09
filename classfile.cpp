@@ -27,10 +27,10 @@ std::string getType(int type)
     case T_CHAR:    return "char";
     case T_FLOAT:   return "float";
     case T_DOUBLE:  return "double";
-    case T_BYTE:    return "char";
-    case T_SHORT:   return "short";
-    case T_INT:     return "int";
-    case T_LONG:    return "long";
+    case T_BYTE:    return "int8_t";
+    case T_SHORT:   return "int16_t";
+    case T_INT:     return "int32_t";
+    case T_LONG:    return "int64_t";
     }
 
     throw fmt::format("Invalid type: '{}'.", type);
@@ -105,11 +105,11 @@ std::string getAsString(const Value & value)
     return std::visit([](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
 
-        if constexpr (std::is_same_v<T, int>)
+        if constexpr (std::is_same_v<T, int32_t>)
         {
             return fmt::format("{}", arg);
         }
-        else if constexpr (std::is_same_v<T, long>)
+        else if constexpr (std::is_same_v<T, int64_t>)
         {
             return fmt::format("{}L", arg);
         }
@@ -159,7 +159,7 @@ std::string invertBinaryOperator(std::string binop)
     if (binop == "<=") return ">";
     if (binop ==  ">") return  "<=";
 
-    assert(false);
+    throw fmt::format("'{}' is not a valid binary operator.", binop);
 }
 
 ClassFile::ClassFile(std::string filename, std::string projectName, bool partial)
@@ -891,11 +891,6 @@ std::vector<Instruction> ClassFile::lineAnalyser(Buffer & buffer, const std::str
 
 std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const std::string & name, u4 position)
 {
-    if (sizeof(int) == sizeof(long))
-    {
-        throw fmt::format("'int' and 'long' are the same size.");
-    }
-
     auto buffer_size = buffer.size();
     auto start_pc = getOpcodeFromLine(position);
 

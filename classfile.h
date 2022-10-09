@@ -80,7 +80,7 @@ struct Object
     std::string ctor;
 };
 
-using Value = std::variant<int, long, float, double, std::string, Array, Object>;
+using Value = std::variant<int32_t, int64_t, float, double, std::string, Array, Object>;
 
 class ClassFile
 {

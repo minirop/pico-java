@@ -6,6 +6,7 @@ QMAKE_CXXFLAGS += -std=c++2b
 
 LIBS += -lfmt
 DESTDIR = bin
+TARGET = pico-java
 
 SOURCES += \
         boards/gamebuino.cpp \
