@@ -17,4 +17,5 @@ HEADERS += \
     boards/gamebuino.h \
     boards/pico.h \
     classfile.h \
-    globals.h
+    globals.h \
+    stb_image.h

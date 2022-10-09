@@ -75,31 +75,38 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
         }
     }
 
-    std::string project_name, board_name;
-    for (auto & file : javaFiles)
+    try
     {
-        ClassFile tmp(file, ""s, true);
-        if (tmp.hasBoard())
+        std::string project_name, board_name;
+        for (auto & file : javaFiles)
         {
-            project_name = tmp.fileName;
-            board_name = tmp.boardName();
+            ClassFile tmp(file, ""s, true);
+            if (tmp.hasBoard())
+            {
+                project_name = tmp.fileName;
+                board_name = tmp.boardName();
+            }
+        }
+
+        std::vector<ClassFile> classFiles;
+        for (auto & file : javaFiles)
+        {
+            classFiles.push_back(ClassFile(file, project_name));
+        }
+
+        auto board = getBoardTypeFromString(board_name);
+        if (board == Board::Gamebuino)
+        {
+            build_gamebuino(project_name, classFiles);
+        }
+        else
+        {
+            build_pico(project_name, getBoardTypeFromString(board_name), classFiles);
         }
     }
-
-    std::vector<ClassFile> classFiles;
-    for (auto & file : javaFiles)
+    catch (const std::string & str)
     {
-        classFiles.push_back(ClassFile(file, project_name));
-    }
-
-    auto board = getBoardTypeFromString(board_name);
-    if (board == Board::Gamebuino)
-    {
-        build_gamebuino(project_name, classFiles);
-    }
-    else
-    {
-        build_pico(project_name, getBoardTypeFromString(board_name), classFiles);
+        fmt::print("{}\n", str);
     }
 
     return 0;
@@ -258,15 +265,6 @@ void copyUserFiles(fs::path currentPath)
 {
     for (auto ext : { ".h"s, ".cpp"s })
     {
-        if (fs::exists(currentPath / (RESOURCES_FILE + ext)))
-        {
-            fs::copy_file(currentPath / (RESOURCES_FILE + ext), fs::current_path() / (RESOURCES_FILE + ext), fs::copy_options::overwrite_existing);
-        }
-        else
-        {
-            fs::remove(fs::current_path() / (RESOURCES_FILE + ext));
-        }
-
         if (fs::exists(currentPath / (USER_FILE + ext)))
         {
             fs::copy_file(currentPath / (USER_FILE + ext), fs::current_path() / (USER_FILE + ext), fs::copy_options::overwrite_existing);

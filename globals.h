@@ -40,6 +40,7 @@ struct FunctionData
     std::string name;
     std::string descriptor;
     std::vector<Instruction> instructions;
+    u2 flags;
 };
 
 struct FieldData
@@ -335,8 +336,9 @@ constexpr const char* USER_FILE = "userdata";
 constexpr u1 UNSIGNED_TYPE = 0x01;
 constexpr u1 CONST_TYPE = 0x02;
 
-constexpr u1 ACC_PUBLIC = 0x0001;
-constexpr u1 ACC_FINAL = 0x0010;
+constexpr u2 ACC_PUBLIC = 0x0001;
+constexpr u2 ACC_STATIC = 0x0008;
+constexpr u2 ACC_FINAL = 0x0010;
 
 constexpr auto OBJ_INSTANCE = "local_0";
 

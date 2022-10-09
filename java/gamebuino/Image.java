@@ -7,6 +7,9 @@ public class Image
 	public Image(byte[] data) {}
 	public Image(short[] data) {}
 	public Image(String string, Format format) {}
+	public Image(String string, Format format, int yframes) {}
+	public Image(String string, Format format, int yframes, int xframes) {}
+	public Image(String string, Format format, int yframes, int xframes, int loop) {}
 	public native void clear();
 	public native void print(String text);
 	public native void println(String text);

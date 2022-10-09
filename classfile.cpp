@@ -701,17 +701,24 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
 
     for (auto & func : functions)
     {
-        output_h << '\n';
+        if (!hasBoard() || (func.flags & ACC_PUBLIC))
+        {
+            output_h << '\n';
 
-        if (func.name == CONSTRUCTOR)
-        {
-            output_h << fileName;
+            if (func.name == CONSTRUCTOR)
+            {
+                output_h << fileName;
+            }
+            else
+            {
+                if ((func.flags & ACC_STATIC))
+                {
+                    output_h << "static ";
+                }
+                output_h << getReturnType(func.descriptor) << " " << func.name;
+            }
+            output_h << "(" << generateParameters(func.descriptor, true) << ");\n";
         }
-        else
-        {
-            output_h << getReturnType(func.descriptor) << " " << func.name;
-        }
-        output_h << "(" << generateParameters(func.descriptor, true) << ");\n";
     }
 
     if (!hasBoard())
@@ -736,7 +743,7 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
 
     std::ofstream output_c(fileName + "." + extension);
 
-    if (!hasBoard() || board != Board::Gamebuino)
+    if (hasBoard() || board != Board::Gamebuino)
     {
         switch (board)
         {
@@ -748,11 +755,11 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
             break;
         }
 
-        output_c << "#if __has_include(\"" << RESOURCES_FILE << "\")\n"
-                 << "#include \"" << RESOURCES_FILE << "\"\n"
+        output_c << "#if __has_include(\"" << RESOURCES_FILE << ".h\")\n"
+                 << "#include \"" << RESOURCES_FILE << ".h\"\n"
                  << "#endif\n"
-                 << "#if __has_include(\"" << USER_FILE << "\")\n"
-                 << "#include \"" << USER_FILE << "\"\n"
+                 << "#if __has_include(\"" << USER_FILE << ".h\")\n"
+                 << "#include \"" << USER_FILE << ".h\"\n"
                  << "#endif\n";
         for (auto & f : files)
         {
@@ -1621,13 +1628,29 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
                 auto offset = stack.size() - argsCount;
                 if (className == "gamebuino/Image")
                 {
-                    if (argsCount == 2)
+                    if (argsCount > 1 && argsCount < 6)
                     {
                         auto filename = std::get<std::string>(stack[offset + 0]);
                         boost::replace_all(filename, "\""s, ""s);
                         auto sFormat = getAsString(stack[offset + 1]);
                         auto format = (sFormat.ends_with("Rgb565")) ? Format::Rgb565 : Format::Indexed;
-                        add_resource(filename, format);
+
+                        int yframes = 1, xframes = 1, loop = 0;
+
+                        switch (argsCount)
+                        {
+                        case 5:
+                            loop = std::get<int>(stack[offset + 4]);
+                            [[fallthrough]];
+                        case 4:
+                            xframes = std::get<int>(stack[offset + 3]);
+                            [[fallthrough]];
+                        case 3:
+                            yframes = std::get<int>(stack[offset + 2]);
+                            break;
+                        }
+
+                        add_resource(filename, format, yframes, xframes, loop);
                         argsString = ", " + encode_filename(filename);
                     }
                     else if (descriptor == "([B)V")
