@@ -26,7 +26,7 @@ void build_pico(std::string project_name, Board board, std::vector<ClassFile> fi
     }
 
     auto tempPath = fs::temp_directory_path();
-    std::string tempDir = "java-pico";
+    std::string tempDir = "pico-" + project_name;
 
     auto currentPath = fs::current_path();
     fs::current_path(tempPath);
@@ -293,6 +293,7 @@ std::string get_cmake_board_name(Board board)
     if (board == Board::Tiny2040)     return "pimoroni_tiny2040";
     if (board == Board::Tiny2040_2mb) return "pimoroni_tiny2040_2mb";
     if (board == Board::Badger2040)   return "pimoroni_badger2040";
+    if (board == Board::Picosystem)   return "pimoroni_picosystem";
 
     throw fmt::format("Unknown board {}!", std::to_underlying(board));
 }

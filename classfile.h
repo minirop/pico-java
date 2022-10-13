@@ -111,9 +111,14 @@ public:
     std::vector<Value> stack;
     std::string board_name;
     std::string fileName;
+    std::string filePath;
     Buffer * fullBuffer = nullptr;
     std::vector<std::tuple<u2, u2>> * lines = nullptr;
     std::string project_name;
+    std::vector<std::string> rawCMake;
+
+    static inline std::vector<ClassFile> partialClasses;
+    std::vector<u1> getFunctionFlags(std::string name);
 };
 
 #endif // CLASSFILE_H

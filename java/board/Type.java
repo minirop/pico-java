@@ -8,4 +8,5 @@ public enum Type
 	Tiny2040_2mb,
 	Badger2040,
 	Gamebuino,
+	Picosystem,
 }

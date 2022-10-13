@@ -62,27 +62,29 @@ std::string getTypeFromDescriptor(std::string descriptor, u8 flags)
     }
 
     std::string prefix;
-    if (flags & CONST_TYPE) prefix += "const ";
+    std::string suffix;
+    if (flags & CONST_TYPE)    prefix += "const ";
     if (flags & UNSIGNED_TYPE) prefix += "u";
+    if (flags & POINTER_TYPE)  suffix += "*";
 
     if (descriptor == "I")
     {
-        return prefix + "int32_t";
+        return prefix + "int32_t" + suffix;
     }
 
     if (descriptor == "B")
     {
-        return prefix + "int8_t";
+        return prefix + "int8_t" + suffix;
     }
 
     if (descriptor == "S")
     {
-        return prefix + "int16_t";
+        return prefix + "int16_t" + suffix;
     }
 
     if (descriptor == "Z")
     {
-        return "bool";
+        return "bool" + suffix;
     }
 
     if (descriptor.starts_with("L") && descriptor.ends_with(";"))
@@ -92,7 +94,7 @@ std::string getTypeFromDescriptor(std::string descriptor, u8 flags)
         {
             return jt.substr(6) + "_t";
         }
-        return javaToCpp(jt);
+        return javaToCpp(jt) + suffix;
     }
 
     throw fmt::format("Invalid type used as a static field: '{}'.", descriptor);
@@ -166,8 +168,18 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
 {
     project_name = projectName;
 
-    fileName = filename.substr(0, filename.find('.'));
-    std::ifstream file(fileName + ".class", std::ios::binary);
+    filePath = filename.substr(0, filename.rfind('.'));
+    if (filePath.starts_with("./"))
+    {
+        filePath = filePath.substr(2);
+    }
+    fileName = filePath;
+    if (fileName.contains("/"))
+    {
+        fileName = fileName.substr(fileName.rfind('/') + 1);
+    }
+    std::ifstream file(filePath + ".class", std::ios::binary);
+    assert(file.is_open());
 
     file.seekg(0, std::ios::end);
     auto fileSize = file.tellg();
@@ -304,7 +316,9 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
         }
     }
 
-    [[maybe_unused]] auto access_flags = r16();
+    auto access_flags = r16();
+    if (access_flags & ACC_INTERFACE) return;
+
     [[maybe_unused]] auto this_class = r16();
     [[maybe_unused]] auto super_class = r16(); // TODO: check if super_class is object
     auto interfaces_count = r16();
@@ -345,7 +359,11 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
 
                     if (type_name == "Ltypes/unsigned;")
                     {
-                        flags += UNSIGNED_TYPE;
+                        flags |= UNSIGNED_TYPE;
+                    }
+                    else if (type_name == "Ltypes/pointer;")
+                    {
+                        flags |= POINTER_TYPE;
                     }
                 }
             }
@@ -361,6 +379,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
     {
         std::string name;
         std::string descriptor;
+        std::vector<u1> flags; // parameters' flags
         Buffer buffer;
     };
 
@@ -382,6 +401,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
 
         auto name = getStringFromUtf8(name_index);
         auto descriptor = getStringFromUtf8(descriptor_index);
+        auto flags = std::vector<u1>(countArgs(descriptor), u1{});
 
         for (auto & attr : attributes)
         {
@@ -389,15 +409,69 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
 
             if (attribute_name == "Code")
             {
-                methodsToDecompile.push_back({ name, descriptor, attr.info });
+                methodsToDecompile.push_back({ name, descriptor, flags, attr.info });
             }
             else if (attribute_name == "LineNumberTable")
             {
+            }
+            else if (attribute_name == "RuntimeInvisibleParameterAnnotations")
+            {
+                MethData * methData = nullptr;
+                for (auto & m : methodsToDecompile)
+                {
+                    if (m.name == name)
+                    {
+                        methData = &m;
+                    }
+                }
+
+                if (!methData)
+                {
+                    methodsToDecompile.push_back({ name, descriptor, flags, {} });
+                    methData = &methodsToDecompile.back();
+                }
+
+                auto buffer = attr.info;
+
+                auto num_parameters = r8();
+                for (u2 ii = 0; ii < num_parameters; ++ii)
+                {
+                    auto num_parameter_annotations = r16();
+
+                    for (u2 iii = 0; iii < num_parameter_annotations; ++iii)
+                    {
+                        auto type_index = r16();
+                        auto type_name = getStringFromUtf8(type_index);
+                        [[maybe_unused]] auto num_element_value_pairs = r16();
+
+                        if (type_name == "Ltypes/unsigned;")
+                        {
+                            auto flags = methData->flags[ii];
+                            flags |= UNSIGNED_TYPE;
+                            methData->flags[ii] = flags;
+                        }
+                        else if (type_name == "Ltypes/pointer;")
+                        {
+                            auto flags = methData->flags[ii];
+                            flags |= POINTER_TYPE;
+                            methData->flags[ii] = flags;
+                        }
+                    }
+                }
+            }
+            else if (attribute_name == "Signature")
+            {
+                // TODO?
             }
             else
             {
                 throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
             }
+        }
+
+        if (attributes_count == 0)
+        {
+            methodsToDecompile.push_back({ name, descriptor, flags, {} });
         }
     }
 
@@ -424,15 +498,10 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
                     auto element_name = getStringFromUtf8(element_name_index);
 
                     // value: element_value
-                    auto tag = r8();
+                    [[maybe_unused]] auto tag = r8();
 
                     if (type_name == "Lboard/Board;" && element_name == "value")
                     {
-                        if (tag != 'e')
-                        {
-                            throw fmt::format("Annotation '@Board' must contains an enumeration.");
-                        }
-
                         auto type_name_index = r16();
                         auto type_name = getStringFromUtf8(type_name_index);
                         auto const_name_index = r16();
@@ -446,9 +515,56 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
                         {
                             throw fmt::format("Annotation '@Board' must contains a board.Type value.");
                         }
+                    }
+                    else if (type_name == "Lpimoroni/Picosystem;")
+                    {
+                        auto const_value_index = r16();
+                        auto constant = constantPool[const_value_index];
+                        bool boolean = std::get<int>(constant);
 
-                        iii = num_element_value_pairs;
-                        ii = num_annotations;
+                        if (element_name == "DoublePixels")
+                        {
+                            if (boolean)
+                            {
+                                rawCMake.push_back("pixel_double(${PROJECT_NAME})"s);
+                            }
+                        }
+                        else if (element_name == "StartupLogo")
+                        {
+                            if (!boolean)
+                            {
+                                rawCMake.push_back("disable_startup_logo(${PROJECT_NAME})"s);
+                            }
+                        }
+                        else if (element_name == "SpriteSheet")
+                        {
+                            if (!boolean)
+                            {
+                                rawCMake.push_back("no_spritesheet(${PROJECT_NAME})"s);
+                            }
+                        }
+                        else if (element_name == "Font")
+                        {
+                            if (!boolean)
+                            {
+                                rawCMake.push_back("no_font(${PROJECT_NAME})"s);
+                            }
+                        }
+                        else if (element_name == "Overclock")
+                        {
+                            if (!boolean)
+                            {
+                                rawCMake.push_back("no_overclock(${PROJECT_NAME})"s);
+                            }
+                        }
+                        else
+                        {
+                            throw fmt::format("Unknown field '{}' for annotation 'Picosystem'.", element_name);
+                        }
+                    }
+                    else
+                    {
+                        throw fmt::format("Annotation '{}' is not supported.", type_name);
                     }
                 }
             }
@@ -536,9 +652,28 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
         else if (attribute_name == "InnerClasses")
         {
         }
+        else if (attribute_name == "Signature")
+        {
+        }
         else
         {
             throw fmt::format("Unhandled class attribute: '{}'.", attribute_name);
+        }
+    }
+
+    for (auto & meth : methodsToDecompile)
+    {
+        auto name = meth.name;
+
+        auto skip = hasBoard() && name == CONSTRUCTOR;
+        if (!skip)
+        {
+            FunctionData funData;
+            funData.name = name;
+            funData.descriptor = meth.descriptor;
+            funData.parametersFlags = meth.flags;
+
+            functions.push_back(funData);
         }
     }
 
@@ -552,6 +687,12 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
         auto name = meth.name;
         auto descriptor = meth.descriptor;
         auto buffer = meth.buffer;
+
+        if (!buffer.size())
+        {
+            fmt::print("Function '{}' has no code.", name);
+            continue;
+        }
 
         [[maybe_unused]] u2 max_stack = r16();
         [[maybe_unused]] u2 max_locals = r16();
@@ -609,12 +750,14 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
             auto skip = hasBoard() && name == CONSTRUCTOR;
             if (!skip)
             {
-                FunctionData funData;
-                funData.name = name;
-                funData.descriptor = descriptor;
-                funData.instructions = lineAnalyser(code, name, lineNumbers);
-
-                functions.push_back(funData);
+                for (auto & funData : functions)
+                {
+                    if (funData.name == name)
+                    {
+                        funData.instructions = lineAnalyser(code, name, lineNumbers);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -701,6 +844,11 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
 
     for (auto & func : functions)
     {
+        if (func.name == STATIC_INIT)
+        {
+            continue;
+        }
+
         if (!hasBoard() || (func.flags & ACC_PUBLIC))
         {
             output_h << '\n';
@@ -717,7 +865,7 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
                 }
                 output_h << getReturnType(func.descriptor) << " " << func.name;
             }
-            output_h << "(" << generateParameters(func.descriptor, true) << ");\n";
+            output_h << "(" << generateParameters(func.descriptor, func.parametersFlags, true) << ");\n";
         }
     }
 
@@ -749,6 +897,9 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
         {
         case Board::Gamebuino:
             output_c << "#include \"gamebuino-java.h\"\n";
+            break;
+        case Board::Picosystem:
+            output_c << "#include \"picosystem-java.h\"\n";
             break;
         default: // pico boards
             output_c << "#include \"pico-java.h\"\n";
@@ -805,10 +956,26 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
 
             output_c << ";\n";
         }
+
+        for (auto & func : functions)
+        {
+            if (func.name == STATIC_INIT)
+            {
+                continue;
+            }
+
+            output_c << getReturnType(func.descriptor) << " " << func.name
+                     << "(" << generateParameters(func.descriptor, func.parametersFlags, false) << ");\n";
+        }
     }
 
     for (auto & func : functions)
     {
+        if (func.name == STATIC_INIT)
+        {
+            continue;
+        }
+
         output_c << '\n';
 
         std::string classNameSpace;
@@ -826,7 +993,7 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
         {
             output_c << getReturnType(func.descriptor) << " " << classNameSpace << func.name;
         }
-        output_c << "(" << generateParameters(func.descriptor, !hasBoard()) << ")\n{\n";
+        output_c << "(" << generateParameters(func.descriptor, func.parametersFlags, !hasBoard()) << ")\n{\n";
 
         int depth = 0;
         for (auto & inst : func.instructions)
@@ -1185,7 +1352,8 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
 
             if ((*fullBuffer)[absolute - 3] == goto_)
             {
-                skippedGotos.insert(absolute - 3);
+                // why?
+                //skippedGotos.insert(absolute - 3);
             }
             break;
         }
@@ -1377,14 +1545,45 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             }
             fullName = javaToCpp(fullName);
 
+
             std::string argsString;
             auto argsCount = countArgs(descriptor);
+            std::vector<u1> pFlags(argsCount, u1{});
+
+            if (!fullName.contains("::"))
+            {
+                for (auto & m : functions)
+                {
+                    if (fullName == m.name)
+                    {
+                        pFlags = m.parametersFlags;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                for (auto & c : partialClasses)
+                {
+                    if (c.filePath == className)
+                    {
+                        pFlags = c.getFunctionFlags(methodName);
+                        break;
+                    }
+                }
+            }
+
             if (argsCount && argsCount <= stack.size())
             {
                 auto offset = stack.size() - argsCount;
                 for (size_t idx = 0; idx < argsCount; ++idx)
                 {
-                    argsString += fmt::format(", {}", getAsString(stack[offset + idx]));
+                    std::string ref = "";
+                    if (pFlags[idx] & POINTER_TYPE)
+                    {
+                        ref = "&";
+                    }
+                    argsString += fmt::format(", {}{}", ref, getAsString(stack[offset + idx]));
                 }
 
                 argsString = argsString.substr(2);
@@ -1454,7 +1653,11 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
             auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
 
-            auto fullName = fmt::format("{}::{}", className, variableName);
+            auto fullName = variableName;
+            if (className != project_name)
+            {
+                fullName = fmt::format("{}::{}", className, fullName);
+            }
             fullName = javaToCpp(fullName);
 
             auto val = stack.back();
@@ -1820,7 +2023,8 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
 
             if ((*fullBuffer)[absolute - 3] == goto_)
             {
-                skippedGotos.insert(absolute - 3);
+                // why??
+                //skippedGotos.insert(absolute - 3);
             }
             break;
         }
@@ -2361,4 +2565,17 @@ std::string ClassFile::getStringFromUtf8(int index)
 {
     auto b = std::get<Utf8>(constantPool[index]).bytes;
     return std::string { begin(b), end(b) };
+}
+
+std::vector<u1> ClassFile::getFunctionFlags(std::string name)
+{
+    for (auto & m : functions)
+    {
+        if (m.name == name)
+        {
+            return m.parametersFlags;
+        }
+    }
+
+    throw fmt::format("Unknown function '{}' in class '{}'.", name, fileName);
 }

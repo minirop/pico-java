@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "boards/pico.h"
 #include "boards/gamebuino.h"
+#include "boards/picosystem.h"
 #include <bit>
 
 u4 countArgs(std::string str)
@@ -88,6 +89,16 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
             }
         }
 
+        for (const fs::directory_entry& dir_entry :
+                fs::recursive_directory_iterator("."))
+        {
+            if (dir_entry.is_regular_file() && dir_entry.path().extension().string() == ".class")
+            {
+                ClassFile tmp(dir_entry.path().string(), ""s, true);
+                ClassFile::partialClasses.push_back(tmp);
+            }
+        }
+
         std::vector<ClassFile> classFiles;
         for (auto & file : javaFiles)
         {
@@ -98,6 +109,10 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
         if (board == Board::Gamebuino)
         {
             build_gamebuino(project_name, classFiles);
+        }
+        else if (board == Board::Picosystem)
+        {
+            build_picosystem(project_name, classFiles);
         }
         else
         {
@@ -193,11 +208,12 @@ Board getBoardTypeFromString(std::string board_name)
     if (board_name == "tiny2040_2mb") return Board::Tiny2040_2mb;
     if (board_name == "badger2040")   return Board::Badger2040;
     if (board_name == "gamebuino")    return Board::Gamebuino;
+    if (board_name == "picosystem")    return Board::Picosystem;
 
     throw fmt::format("Invalid board: '{}'.", board_name);
 }
 
-std::string generateParameters(std::string descriptor, bool isMethod)
+std::string generateParameters(std::string descriptor, std::vector<u1> flags, bool isMethod)
 {
     std::string ret;
 
@@ -225,9 +241,15 @@ std::string generateParameters(std::string descriptor, bool isMethod)
                 ++index;
             }
 
+            if (flags[count] & POINTER_TYPE) ++arrayCount;
+
             if (type == "java/lang/String")
             {
                 ret += fmt::format(", std::string {}local_{}", std::string(arrayCount, '*'), count);
+            }
+            else if (type == "pimoroni/buffer")
+            {
+                ret += fmt::format(", pimoroni::buffer {}local_{}", std::string(arrayCount, '*'), count);
             }
             else
             {
@@ -237,10 +259,12 @@ std::string generateParameters(std::string descriptor, bool isMethod)
         }
         case 'I':
         case 'Z':
-            ret += fmt::format(", int {}local_{}", std::string(arrayCount, '*'), count);
+        {
+            ret += fmt::format(", {} {}local_{}", getTypeFromDescriptor(descriptor[index]+""s, flags[count]), std::string(arrayCount, '*'), count);
             arrayCount = 0;
             ++count;
             break;
+        }
         case '[':
             ++arrayCount;
             break;

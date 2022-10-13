@@ -41,6 +41,7 @@ struct FunctionData
     std::string descriptor;
     std::vector<Instruction> instructions;
     u2 flags;
+    std::vector<u1> parametersFlags;
 };
 
 struct FieldData
@@ -222,6 +223,7 @@ enum class Board
     Tiny2040_2mb,
     Badger2040,
     Gamebuino,
+    Picosystem,
 };
 
 struct Fieldref
@@ -316,9 +318,10 @@ using ConstantPool = std::vector<Constant>;
 
 u4 countArgs(std::string str);
 std::string getReturnType(std::string descriptor);
-std::string generateParameters(std::string descriptor, bool isMethod);
+std::string generateParameters(std::string descriptor, std::vector<u1> flags, bool isMethod);
 Board getBoardTypeFromString(std::string board_name);
 void copyUserFiles(std::filesystem::path currentPath);
+std::string getTypeFromDescriptor(std::string descriptor, u8 flags);
 
 #define STATIC_INIT "<clinit>"
 #define CONSTRUCTOR "<init>"
@@ -335,10 +338,12 @@ constexpr const char* USER_FILE = "userdata";
 
 constexpr u1 UNSIGNED_TYPE = 0x01;
 constexpr u1 CONST_TYPE = 0x02;
+constexpr u1 POINTER_TYPE = 0x04;
 
 constexpr u2 ACC_PUBLIC = 0x0001;
 constexpr u2 ACC_STATIC = 0x0008;
 constexpr u2 ACC_FINAL = 0x0010;
+constexpr u2 ACC_INTERFACE = 0x0200;
 
 constexpr auto OBJ_INSTANCE = "local_0";
 
