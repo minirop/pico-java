@@ -84,7 +84,12 @@ std::string getTypeFromDescriptor(std::string descriptor, u8 flags)
 
     if (descriptor == "Z")
     {
-        return "bool" + suffix;
+        return prefix + "bool" + suffix;
+    }
+
+    if (descriptor == "F")
+    {
+        return prefix + "float" + suffix;
     }
 
     if (descriptor.starts_with("L") && descriptor.ends_with(";"))
@@ -94,7 +99,7 @@ std::string getTypeFromDescriptor(std::string descriptor, u8 flags)
         {
             return jt.substr(6) + "_t";
         }
-        return javaToCpp(jt) + suffix;
+        return prefix + javaToCpp(jt) + suffix;
     }
 
     throw fmt::format("Invalid type used as a static field: '{}'.", descriptor);
@@ -1104,9 +1109,16 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
     Instruction & inst = lineInsts.front();
     inst.position = position;
 
+    bool nonVoidReturnedValue = false;
+
     while (buffer.size())
     {
         auto opcode = r8();
+
+        if (opcode != pop)
+        {
+            nonVoidReturnedValue = false;
+        }
 
         switch (opcode)
         {
@@ -1545,6 +1557,9 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             break;
         }
         case iadd:
+        case ladd:
+        case fadd_:
+        case dadd:
         {
             auto right = stack.back();
             stack.pop_back();
@@ -1573,11 +1588,24 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
                     throw fmt::format("Method '{}' on class '{}' not handled.", methodName, className);
                 }
             }
-
+            else if (className == "java/lang/String")
+            {
+                if (methodName == "valueOf")
+                {
+                    auto val = stack.back();
+                    stack.pop_back();
+                    stack.push_back(fmt::format("std::to_string({})", getAsString(val)));
+                    break;
+                }
+                else
+                {
+                    throw fmt::format("Method '{}' on class '{}' not handled.", methodName, className);
+                }
+            }
 
             auto descriptor = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).descriptor_index);
             auto fullName = methodName;
-            if (className != project_name)
+            if (className != project_name && className != "arduino/std")
             {
                 fullName = fmt::format("{}::{}", className, fullName);
             }
@@ -1639,6 +1667,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             if (retType.size() && retType != "void")
             {
                 stack.push_back(callString);
+                nonVoidReturnedValue = true;
             }
             else
             {
@@ -1658,7 +1687,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             auto variableName = getStringFromUtf8(std::get<NameAndType>(constantPool[method.name_and_type_index]).name_index);
 
             auto fullName = variableName;
-            if (className != project_name)
+            if (className != project_name && className != "arduino/std")
             {
                 fullName = fmt::format("{}::{}", className, fullName);
             }
@@ -1937,17 +1966,17 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             }
             else
             {
-                callString += ';';
                 auto retType = getReturnType(descriptor, 0);
                 if ((retType.size() && retType != "void"))
                 {
                     stack.push_back(callString);
+                    nonVoidReturnedValue = true;
                 }
                 else
                 {
                     Operation op;
                     op.type = OpType::Call;
-                    op.call.code = callString;
+                    op.call.code = callString + ';';
                     operations.push_back(op);
                 }
             }
@@ -2013,6 +2042,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             if (retType.size() && retType != "void")
             {
                 stack.push_back(callString);
+                nonVoidReturnedValue = true;
             }
             else
             {
@@ -2168,6 +2198,44 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             stack.push_back("null");
             break;
         }
+        case f2i:
+        case d2i:
+        {
+            auto value = stack.back();
+            stack.pop_back();
+
+            stack.push_back(fmt::format("static_cast<int>({})", getAsString(value)));
+            break;
+        }
+        case i2f:
+        case i2d:
+        {
+            // do nothing
+            break;
+        }
+        case pop:
+        {
+            if (nonVoidReturnedValue)
+            {
+                auto callString = stack.back();
+                stack.pop_back();
+
+                Operation op;
+                op.type = OpType::Call;
+                op.call.code = getAsString(callString) + ';';
+                operations.push_back(op);
+            }
+            else
+            {
+                stack.pop_back();
+            }
+            break;
+        }
+        case lookupswitch:
+        {
+            assert(false);
+            break;
+        }
         default:
             throw fmt::format("Unhandled opcode: '{:x}'.", opcode);
         }
@@ -2180,7 +2248,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
     case 0: // <(cl)init>
         if (name.front() != '<')
         {
-            assert(false);
+            //assert(false);
         }
         parsed = true;
         break;

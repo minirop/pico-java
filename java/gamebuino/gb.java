@@ -15,6 +15,9 @@ public class gb
 
 	public static Image display;
 	public static Button buttons;
+	public static Sound sound;
+	public static Save save;
+	public static Gui gui;
 
 	public static int frameCount;
 }

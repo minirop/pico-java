@@ -201,6 +201,11 @@ std::string getReturnType(std::string descriptor, u1 flags)
         return "bool" + suffix;
     }
 
+    if (type == "D")
+    {
+        return prefix + "double" + suffix;
+    }
+
     if (type.starts_with("L") && type.ends_with(";"))
     {
         auto jt = type.substr(1, type.size() - 2);
@@ -208,6 +213,10 @@ std::string getReturnType(std::string descriptor, u1 flags)
         if (jt == "java/lang/String")
         {
             return prefix + "std::string" + suffix;
+        }
+        else
+        {
+            return prefix + javaToCpp(jt) + suffix;
         }
     }
 

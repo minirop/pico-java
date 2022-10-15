@@ -52,8 +52,20 @@ void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
     output_header << R"___(
 #include <Gamebuino-Meta.h>
 
+namespace std
+{
+    using string = String;
+
+    template <typename T>
+    inline string to_string(T t)
+    {
+        return string(t);
+    }
+}
+
 namespace gamebuino {
     using Rotation = Gamebuino_Meta::Rotation;
+    using Color = Gamebuino_Meta::Color;
 
     namespace gb {
         inline void begin() { ::gb.begin(); }
@@ -64,6 +76,9 @@ namespace gamebuino {
 
         inline auto & display = ::gb.display;
         inline auto & buttons = ::gb.buttons;
+        inline auto & sound = ::gb.sound;
+        inline auto & save = ::gb.save;
+        inline auto & gui = ::gb.gui;
         inline auto & frameCount = ::gb.frameCount;
     }
 

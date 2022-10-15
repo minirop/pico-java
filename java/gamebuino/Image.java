@@ -22,9 +22,18 @@ public class Image
 	public native void drawImage(int x, int y, Image img, int src_x, int src_y, int src_w, int src_h);
 	public native void setFrame(@unsigned int frame);
 
+	public native void drawLine(int x0, int y0, int x1, int y1);
 	public native void fillRect(int x, int y, int width, int height);
+	public native void fillCircle(int x, int y, int radius);
 
 	public native void setCursor(int x, int y);
+
+	public native void setColor(Color color);
+	public native Color getPixelColor(int x, int y);
+
+	public native void setFontSize(int size);
+	public native int getFontWidth();
+	public native int getFontHeight();
 
 	public native int width();
 	public native int height();
