@@ -8,6 +8,7 @@ public class Button
 	public static int RIGHT;
 	public static int UP;
 	public static int DOWN;
+	public static int MENU;
 
 	public native boolean repeat(int button, int period);
 	public native boolean pressed(int button);

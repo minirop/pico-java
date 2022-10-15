@@ -1,6 +1,8 @@
 #ifndef GLOBALS_H
 #define GLOBALS_H
 
+#define DEBUG
+
 #include <string>
 #include <vector>
 #include <variant>
@@ -41,6 +43,7 @@ struct FunctionData
     std::string descriptor;
     std::vector<Instruction> instructions;
     u2 flags;
+    u1 returnFlags;
     std::vector<u1> parametersFlags;
 };
 
@@ -317,7 +320,7 @@ using Constant = std::variant<std::monostate
 using ConstantPool = std::vector<Constant>;
 
 u4 countArgs(std::string str);
-std::string getReturnType(std::string descriptor);
+std::string getReturnType(std::string descriptor, u1 flags);
 std::string generateParameters(std::string descriptor, std::vector<u1> flags, bool isMethod);
 Board getBoardTypeFromString(std::string board_name);
 void copyUserFiles(std::filesystem::path currentPath);

@@ -165,24 +165,40 @@ s4 reads32(Buffer & buffer)
     return r32();
 }
 
-std::string getReturnType(std::string descriptor)
+std::string getReturnType(std::string descriptor, u1 flags)
 {
     auto paren = descriptor.find(')');
     auto type = descriptor.substr(paren + 1);
+
+    std::string prefix;
+    std::string suffix;
+    if (flags & CONST_TYPE)    prefix += "const ";
+    if (flags & UNSIGNED_TYPE) prefix += "u";
+    if (flags & POINTER_TYPE)  suffix += "*";
 
     if (type == "V")
     {
         return "void";
     }
 
-    if (type == "Z")
-    {
-        return "bool";
-    }
-
     if (type == "I")
     {
-        return "int";
+        return prefix + "int32_t" + suffix;
+    }
+
+    if (type == "B")
+    {
+        return prefix + "int8_t" + suffix;
+    }
+
+    if (type == "S")
+    {
+        return prefix + "int16_t" + suffix;
+    }
+
+    if (type == "Z")
+    {
+        return "bool" + suffix;
     }
 
     if (type.starts_with("L") && type.ends_with(";"))
@@ -191,7 +207,7 @@ std::string getReturnType(std::string descriptor)
 
         if (jt == "java/lang/String")
         {
-            return "std::string";
+            return prefix + "std::string" + suffix;
         }
     }
 

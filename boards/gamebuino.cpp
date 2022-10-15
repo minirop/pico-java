@@ -4,6 +4,14 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#ifndef _WIN64
+#ifdef DEBUG
+#define OUTPUT ""
+#else
+#define OUTPUT ">/dev/null 2>&1"
+#endif
+#endif
+
 struct Resource
 {
     std::string filename;
@@ -20,7 +28,7 @@ void encode_file(std::ofstream & stream, Resource res);
 void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
 {
 #ifndef _WIN64
-    if (system("which arduino-cli >/dev/null 2>&1") != 0)
+    if (system("which arduino-cli " OUTPUT) != 0)
     {
         fmt::print("Could not find 'arduino-cli'.");
         return;
@@ -45,10 +53,14 @@ void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
 #include <Gamebuino-Meta.h>
 
 namespace gamebuino {
+    using Rotation = Gamebuino_Meta::Rotation;
+
     namespace gb {
         inline void begin() { ::gb.begin(); }
         inline void waitForUpdate() { ::gb.waitForUpdate(); }
         inline void setFrameRate(int fps) { ::gb.setFrameRate(fps); }
+        inline bool update() { return ::gb.update(); }
+        inline void setScreenRotation(gamebuino::Rotation r) { ::gb.setScreenRotation(r); }
 
         inline auto & display = ::gb.display;
         inline auto & buttons = ::gb.buttons;
@@ -62,9 +74,17 @@ namespace gamebuino {
         inline auto RIGHT = BUTTON_RIGHT;
         inline auto UP = BUTTON_UP;
         inline auto DOWN = BUTTON_DOWN;
+        inline auto MENU = BUTTON_MENU;
     }
 
     using Image = ::Gamebuino_Meta::Image;
+}
+
+namespace std::std {
+    int random(int a, int b)
+    {
+        return ::random(a, b);
+    }
 }
 )___";
 
@@ -122,7 +142,7 @@ namespace gamebuino {
             #endif
                 " compile --fqbn gamebuino:samd:gamebuino_meta_native --output-dir build"
             #ifndef _WIN64
-                " >/dev/null 2>&1"
+                " " OUTPUT
             #endif
                 );
     if (ret != 0)
@@ -139,7 +159,7 @@ namespace gamebuino {
                  #endif
                      " build{2}{0}.ino.bin {1}{2}{0}.bin"
                  #ifndef _WIN64
-                     " >/dev/null 2>&1"
+                     " " OUTPUT
                  #endif
                      , project_name, currentPath.string(),
                  #ifdef _WIN64

@@ -379,6 +379,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
     {
         std::string name;
         std::string descriptor;
+        u1 returnFlags; // return flag
         std::vector<u1> flags; // parameters' flags
         Buffer buffer;
     };
@@ -409,7 +410,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
 
             if (attribute_name == "Code")
             {
-                methodsToDecompile.push_back({ name, descriptor, flags, attr.info });
+                methodsToDecompile.push_back({ name, descriptor, 0, flags, attr.info });
             }
             else if (attribute_name == "LineNumberTable")
             {
@@ -427,7 +428,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
 
                 if (!methData)
                 {
-                    methodsToDecompile.push_back({ name, descriptor, flags, {} });
+                    methodsToDecompile.push_back({ name, descriptor, 0, flags, {} });
                     methData = &methodsToDecompile.back();
                 }
 
@@ -463,6 +464,42 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
             {
                 // TODO?
             }
+            else if (attribute_name == "RuntimeInvisibleAnnotations")
+            {
+                MethData * methData = nullptr;
+                for (auto & m : methodsToDecompile)
+                {
+                    if (m.name == name)
+                    {
+                        methData = &m;
+                    }
+                }
+
+                if (!methData)
+                {
+                    methodsToDecompile.push_back({ name, descriptor, 0, flags, {} });
+                    methData = &methodsToDecompile.back();
+                }
+
+                auto buffer = attr.info;
+
+                auto num_annotations = r16();
+                for (u2 ii = 0; ii < num_annotations; ++ii)
+                {
+                    auto type_index = r16();
+                    auto type_name = getStringFromUtf8(type_index);
+                    [[maybe_unused]] auto num_element_value_pairs = r16();
+
+                    if (type_name == "Ltypes/unsigned;")
+                    {
+                        methData->returnFlags |= UNSIGNED_TYPE;
+                    }
+                    else if (type_name == "Ltypes/pointer;")
+                    {
+                        methData->returnFlags |= POINTER_TYPE;
+                    }
+                }
+            }
             else
             {
                 throw fmt::format("Unhandled method attribute: '{}'.", attribute_name);
@@ -471,7 +508,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
 
         if (attributes_count == 0)
         {
-            methodsToDecompile.push_back({ name, descriptor, flags, {} });
+            methodsToDecompile.push_back({ name, descriptor, 0, flags, {} });
         }
     }
 
@@ -671,6 +708,7 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
             FunctionData funData;
             funData.name = name;
             funData.descriptor = meth.descriptor;
+            funData.returnFlags = meth.returnFlags;
             funData.parametersFlags = meth.flags;
 
             functions.push_back(funData);
@@ -863,7 +901,7 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
                 {
                     output_h << "static ";
                 }
-                output_h << getReturnType(func.descriptor) << " " << func.name;
+                output_h << getReturnType(func.descriptor, func.returnFlags) << " " << func.name;
             }
             output_h << "(" << generateParameters(func.descriptor, func.parametersFlags, true) << ");\n";
         }
@@ -964,7 +1002,7 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
                 continue;
             }
 
-            output_c << getReturnType(func.descriptor) << " " << func.name
+            output_c << getReturnType(func.descriptor, func.returnFlags) << " " << func.name
                      << "(" << generateParameters(func.descriptor, func.parametersFlags, false) << ");\n";
         }
     }
@@ -991,7 +1029,7 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
         }
         else
         {
-            output_c << getReturnType(func.descriptor) << " " << classNameSpace << func.name;
+            output_c << getReturnType(func.descriptor, func.returnFlags) << " " << classNameSpace << func.name;
         }
         output_c << "(" << generateParameters(func.descriptor, func.parametersFlags, !hasBoard()) << ")\n{\n";
 
@@ -1074,8 +1112,8 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
         {
         case bipush:
         {
-            auto value = r8();
-            stack.push_back(value);
+            auto value = s8();
+            stack.push_back(int32_t { value });
             break;
         }
         case anewarray:
@@ -1597,7 +1635,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             }
 
             auto callString = fmt::format("{}({})", fullName, argsString);
-            auto retType = getReturnType(descriptor);
+            auto retType = getReturnType(descriptor, 0);
             if (retType.size() && retType != "void")
             {
                 stack.push_back(callString);
@@ -1631,8 +1669,8 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
         }
         case sipush:
         {
-            auto value = r16();
-            stack.push_back(value);
+            auto value = s16();
+            stack.push_back(int32_t { value });
             break;
         }
         case irem:
@@ -1900,7 +1938,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             else
             {
                 callString += ';';
-                auto retType = getReturnType(descriptor);
+                auto retType = getReturnType(descriptor, 0);
                 if ((retType.size() && retType != "void"))
                 {
                     stack.push_back(callString);
@@ -1971,7 +2009,7 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             stack.pop_back();
 
             auto callString = fmt::format("{}({})", fullName, argsString);
-            auto retType = getReturnType(descriptor);
+            auto retType = getReturnType(descriptor, 0);
             if (retType.size() && retType != "void")
             {
                 stack.push_back(callString);
@@ -2164,37 +2202,44 @@ std::vector<Instruction> ClassFile::decodeBytecodeLine(Buffer & buffer, const st
             }
             else
             {
-                auto jumpLine = getLineFromOpcode(o2.jump.absolute);
-                bool append = true;
-                for (size_t idx = 0; idx < insts.size(); ++idx)
+                if (o1.type == OpType::Cond)
                 {
-                    if (jumpLine <= insts[idx].position)
+                    // do nothing
+                }
+                else
+                {
+                    auto jumpLine = getLineFromOpcode(o2.jump.absolute);
+                    bool append = true;
+                    for (size_t idx = 0; idx < insts.size(); ++idx)
+                    {
+                        if (jumpLine <= insts[idx].position)
+                        {
+                            Instruction tmp;
+                            tmp.position = position;
+                            tmp.opcode = "while (true)";
+                            insts.insert(insts.begin() + idx, tmp);
+                            tmp.opcode = "{";
+                            insts.insert(insts.begin() + idx + 1, tmp);
+                            append = false;
+                            break;
+                        }
+                    }
+
+                    if (append)
                     {
                         Instruction tmp;
                         tmp.position = position;
                         tmp.opcode = "while (true)";
-                        insts.insert(insts.begin() + idx, tmp);
+                        insts.push_back(tmp);
                         tmp.opcode = "{";
-                        insts.insert(insts.begin() + idx + 1, tmp);
-                        append = false;
-                        break;
+                        insts.push_back(tmp);
                     }
-                }
 
-                if (append)
-                {
                     Instruction tmp;
                     tmp.position = position;
-                    tmp.opcode = "while (true)";
-                    insts.push_back(tmp);
-                    tmp.opcode = "{";
-                    insts.push_back(tmp);
+                    tmp.opcode = "}";
+                    lineInsts.push_back(tmp);
                 }
-
-                Instruction tmp;
-                tmp.position = position;
-                tmp.opcode = "}";
-                lineInsts.push_back(tmp);
             }
 
             parsed = true;
