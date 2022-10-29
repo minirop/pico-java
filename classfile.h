@@ -116,6 +116,7 @@ public:
     std::vector<std::tuple<u2, u2>> * lines = nullptr;
     std::string project_name;
     std::vector<std::string> rawCMake;
+    std::unordered_map<std::string, s4> gbConfig;
 
     static inline std::vector<ClassFile> partialClasses;
     std::vector<u1> getFunctionFlags(std::string name);

@@ -558,6 +558,25 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
                             throw fmt::format("Annotation '@Board' must contains a board.Type value.");
                         }
                     }
+                    else if (type_name == "Lgamebuino/Config;")
+                    {
+                        auto const_value_index = r16();
+                        auto constant = constantPool[const_value_index];
+                        auto const_int = std::get<s4>(constant);
+
+                        if (element_name == "DisplayMode")
+                        {
+                            gbConfig["DISPLAY_MODE"] = const_int;
+                        }
+                        else if (element_name == "FontSize")
+                        {
+                            gbConfig["DEFAULT_FONT_SIZE"] = const_int;
+                        }
+                        else
+                        {
+                            throw fmt::format("Unknown field '{}' for annotation 'Config'.", element_name);
+                        }
+                    }
                     else if (type_name == "Lpimoroni/Picosystem;")
                     {
                         auto const_value_index = r16();
@@ -1052,6 +1071,18 @@ void ClassFile::generate(const std::vector<ClassFile> & files, Board board)
     }
 
     output_c.close();
+
+    if (board == Board::Gamebuino && hasBoard() && gbConfig.size())
+    {
+        std::ofstream output_config("config.h");
+
+        for (auto & [k, v] : gbConfig)
+        {
+            output_config << "#define " << k << " " << v << '\n';
+        }
+
+        output_config.close();
+    }
 }
 
 std::vector<Instruction> ClassFile::lineAnalyser(Buffer & buffer, const std::string & name, std::vector<std::tuple<u2, u2>> lineNumbers)

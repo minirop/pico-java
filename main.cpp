@@ -67,7 +67,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
 
     for (auto & file : javaFiles)
     {
-        int r = system(fmt::format("javac {}", file).data());
+        int r = system(fmt::format("javac -cp api {}", file).data());
 
         if (r != 0)
         {
@@ -118,6 +118,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
         {
             build_pico(project_name, getBoardTypeFromString(board_name), classFiles);
         }
+
+        fmt::print("\n");
     }
     catch (const std::string & str)
     {

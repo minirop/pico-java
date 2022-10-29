@@ -1,16 +1,9 @@
 #include "gamebuino.h"
+#include "helpers.h"
 #include <fmt/format.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-
-#ifndef _WIN64
-#ifdef DEBUG
-#define OUTPUT ""
-#else
-#define OUTPUT ">/dev/null 2>&1"
-#endif
-#endif
 
 struct Resource
 {
@@ -27,13 +20,11 @@ void encode_file(std::ofstream & stream, Resource res);
 
 void build_gamebuino(std::string project_name, std::vector<ClassFile> files)
 {
-#ifndef _WIN64
-    if (system("which arduino-cli " OUTPUT) != 0)
+    if (!helpers::can_execute("arduino-cli"))
     {
         fmt::print("Could not find 'arduino-cli'.");
         return;
     }
-#endif
 
     auto tempPath = fs::temp_directory_path();
 
@@ -150,40 +141,17 @@ namespace std::std {
 
     copyUserFiles(currentPath);
 
-    auto ret = system(
-                "arduino-cli"
-            #ifdef _WIN64
-                ".exe"
-            #endif
-                " compile --fqbn gamebuino:samd:gamebuino_meta_native --output-dir build"
-            #ifndef _WIN64
-                " " OUTPUT
-            #endif
-                );
-    if (ret != 0)
+    auto ret = helpers::execute("arduino-cli", "compile --fqbn gamebuino:samd:gamebuino_meta_native --output-dir build");
+    if (!ret)
     {
         fmt::print("Error during the generation of the .bin file!");
         return;
     }
 
-    ret = system(fmt::format(
-                 #ifdef _WIN64
-                     "copy"
-                 #else
-                     "cp"
-                 #endif
-                     " build{2}{0}.ino.bin {1}{2}{0}.bin"
-                 #ifndef _WIN64
-                     " " OUTPUT
-                 #endif
-                     , project_name, currentPath.string(),
-                 #ifdef _WIN64
-                     "\\"
-                 #else
-                     "/"
-                 #endif
-                     ).data());
-    if (ret == 0)
+    auto src = fs::path("build") / fmt::format("{0}.ino.bin", project_name);
+    auto dst = currentPath / fmt::format("{0}.bin", project_name);
+    ret = helpers::copy(src.string(), dst.string());
+    if (ret)
     {
         fmt::print("Success!");
     }

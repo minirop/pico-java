@@ -13,4 +13,6 @@ public class Button
 	public native boolean repeat(int button, int period);
 	public native boolean pressed(int button);
 	public native boolean released(int button);
+	public native boolean held(int button, int time);
+	public native int timeHeld(int button);
 }

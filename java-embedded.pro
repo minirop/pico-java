@@ -15,10 +15,14 @@ SOURCES += \
         classfile.cpp \
         main.cpp
 
+unix:SOURCES += helpers_linux.cpp
+win32:SOURCES += helpers_windows.cpp
+
 HEADERS += \
     boards/gamebuino.h \
     boards/pico.h \
     boards/picosystem.h \
     classfile.h \
     globals.h \
+    helpers.h \
     stb_image.h

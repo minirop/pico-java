@@ -12,8 +12,10 @@ public class gb
 	public static native @unsigned short getFreeRam();
 	public static native Rotation getScreenRotation();
 	public static native void setScreenRotation(Rotation r);
+	public static native int createColor(int r, int g, int b);
 
 	public static Image display;
+	public static Image lights;
 	public static Button buttons;
 	public static Sound sound;
 	public static Save save;
