@@ -564,17 +564,20 @@ ClassFile::ClassFile(std::string filename, std::string projectName, bool partial
                         auto constant = constantPool[const_value_index];
                         auto const_int = std::get<s4>(constant);
 
-                        if (element_name == "DisplayMode")
+                        if (const_int >= 0)
                         {
-                            gbConfig["DISPLAY_MODE"] = const_int;
-                        }
-                        else if (element_name == "FontSize")
-                        {
-                            gbConfig["DEFAULT_FONT_SIZE"] = const_int;
-                        }
-                        else
-                        {
-                            throw fmt::format("Unknown field '{}' for annotation 'Config'.", element_name);
+                            if (element_name == "DisplayMode")
+                            {
+                                gbConfig["DISPLAY_MODE"] = const_int;
+                            }
+                            else if (element_name == "FontSize")
+                            {
+                                gbConfig["DEFAULT_FONT_SIZE"] = const_int;
+                            }
+                            else
+                            {
+                                throw fmt::format("Unknown field '{}' for annotation 'Config'.", element_name);
+                            }
                         }
                     }
                     else if (type_name == "Lpimoroni/Picosystem;")
